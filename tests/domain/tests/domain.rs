@@ -436,6 +436,10 @@ fn topic_preparing(w: &mut Kizn) {
 
 #[then("I see the topic as ready")]
 async fn topic_ready(w: &mut Kizn) {
+    // Ready means full: every outcome holds its whole bank.
+    for o in &w.topic.as_ref().unwrap().outcomes {
+        assert_eq!(o.active, o.expected, "outcome {} is ready with {} of {} questions", o.ord, o.active, o.expected);
+    }
     open_kizn(w).await;
     let t = &w.today().topics[0];
     assert!(

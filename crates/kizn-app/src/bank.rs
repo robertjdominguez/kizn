@@ -136,6 +136,10 @@ impl Ctx {
         let concept_ids: Vec<String> = concepts.iter().map(|c| c.id.clone()).collect();
         let all_topics = self.store.all_topics().map_err(db)?;
         let mut empty_batches = 0;
+        // A slot is filled to its full size before moving on. (bank_needs
+        // only reports a slot while it's below the refill line, so asking it
+        // again after every batch would stop each slot halfway.)
+        let mut filling: Option<(kizn_core::bank::Slot, usize)> = None;
         loop {
             let active = self.store.items(&o.id, Some("active")).map_err(db)?;
             let banked: Vec<BankedItem> = active
@@ -148,7 +152,8 @@ impl Ctx {
                 .collect();
             // Practice (Phase 4) will mark items attempted; until then none are.
             let needs = bank_needs(target, &concept_ids, &banked, &HashSet::new());
-            let Some((slot, missing)) = needs.into_iter().next() else { return Ok(Filled::Full) };
+            let next = filling.take().or_else(|| needs.into_iter().next());
+            let Some((slot, missing)) = next else { return Ok(Filled::Full) };
 
             let count = missing.min(ITEMS_PER_CALL);
             let mut existing: Vec<(String, Vec<String>)> = self
@@ -255,6 +260,10 @@ impl Ctx {
                 }
             }
             self.store.finish_batch(&batch, &counts, None, &self.now()).map_err(db)?;
+            let left = missing.saturating_sub(counts.accepted as usize);
+            if left > 0 {
+                filling = Some((slot, left));
+            }
             empty_batches = if counts.accepted == 0 { empty_batches + 1 } else { 0 };
             if empty_batches >= 2 {
                 return Ok(Filled::NothingUsable);
