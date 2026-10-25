@@ -1,4 +1,4 @@
-import { ChevronRight, CircleCheck, LoaderCircle, PencilLine, Plug, Sprout } from "lucide-react";
+import { ChevronRight, CircleCheck, LoaderCircle, PencilLine, Plug, Plus, Sprout } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useCallback, useEffect, useState } from "react";
 import type { TopicSummary } from "../bindings/TopicSummary";
@@ -65,7 +65,15 @@ export function Today() {
             aria-label="Your topics"
             className="flex flex-col gap-2"
           >
-            <h2 className="text-[11px] font-medium uppercase tracking-wide text-ink-4">Your topics</h2>
+            <div className="flex items-center">
+              <h2 className="flex-1 text-[11px] font-medium uppercase tracking-wide text-ink-4">Your topics</h2>
+              <a
+                href="#/new-topic"
+                className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-accent transition-colors hover:bg-accent/10"
+              >
+                <Plus size={13} aria-hidden /> Start a topic
+              </a>
+            </div>
             <ul className="flex flex-col gap-2">
               <AnimatePresence initial={false}>
                 {today.topics.map((t) => (
@@ -93,14 +101,12 @@ export function Today() {
               practice for them.
             </p>
           </div>
-          <button
-            type="button"
-            disabled
-            title="Topic setup isn't built yet"
-            className="rounded-md bg-teal/15 px-3 py-1.5 text-sm font-medium text-teal transition-colors hover:bg-teal/25 disabled:cursor-not-allowed disabled:opacity-60"
+          <a
+            href="#/new-topic"
+            className="rounded-md bg-teal/15 px-3 py-1.5 text-sm font-medium text-teal transition-colors hover:bg-teal/25"
           >
             Start a topic
-          </button>
+          </a>
         </motion.section>
       )}
     </div>
@@ -115,7 +121,7 @@ function TopicCard({ topic: t }: { topic: TopicSummary }) {
   return (
     <motion.li variants={rise} {...presence} layout>
       <a
-        href={`#/topic/${encodeURIComponent(t.id)}`}
+        href={t.status === "draft" ? `#/setup/${encodeURIComponent(t.id)}` : `#/topic/${encodeURIComponent(t.id)}`}
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
         onFocus={() => setHovered(true)}
