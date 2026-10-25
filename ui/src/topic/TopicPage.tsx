@@ -1,4 +1,13 @@
-import { ChevronDown, ChevronLeft, Circle, CircleAlert, CircleCheck, LoaderCircle, Target } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronLeft,
+  Circle,
+  CircleAlert,
+  CircleCheck,
+  LoaderCircle,
+  RotateCw,
+  Target,
+} from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useCallback, useEffect, useId, useState } from "react";
 import type { OutcomeView } from "../bindings/OutcomeView";
@@ -225,6 +234,9 @@ function OutcomeRow({ outcome: o, index }: { outcome: OutcomeView; index: number
               </motion.span>
             </AnimatePresence>
           </div>
+          <AnimatePresence initial={false}>
+            {state === "failed" && <FailurePanel key="failure" outcome={o} />}
+          </AnimatePresence>
         </div>
       </div>
     </motion.li>
@@ -306,5 +318,54 @@ function SlotBar({ slots, target }: { slots: SlotView[]; target: string }) {
         );
       })}
     </ul>
+  );
+}
+
+// Why an outcome's questions can't be written, in plain words, with a way to
+// try again now (kizn also retries by itself).
+function FailurePanel({ outcome: o }: { outcome: OutcomeView }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const retry = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await call({ type: "retry_bank", outcome_id: o.id });
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const reason = o.bank_error ?? "something went wrong writing questions";
+  return (
+    <motion.div
+      variants={rise}
+      {...presence}
+      className="mt-1 flex flex-col gap-2 rounded-lg border border-warn/30 bg-warn/5 px-3 py-2.5 text-xs"
+    >
+      <p className="text-ink-2">
+        {reason.charAt(0).toUpperCase()}
+        {reason.slice(1)}
+        {/[.!?]$/.test(reason) ? "" : "."} <span className="text-ink-3">kizn will try again in a few minutes.</span>
+      </p>
+      {error && <p className="text-danger">{error}</p>}
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={retry}
+          disabled={busy}
+          className="flex items-center gap-1.5 rounded-md bg-warn/15 px-2.5 py-1 font-medium text-warn transition-colors hover:bg-warn/25 disabled:opacity-60"
+        >
+          <RotateCw size={12} className={busy ? "animate-spin" : ""} aria-hidden /> Try now
+        </button>
+        <a
+          href="#/settings"
+          className="rounded-md px-2 py-1 text-ink-3 transition-colors hover:bg-raised hover:text-ink"
+        >
+          Settings
+        </a>
+      </div>
+    </motion.div>
   );
 }
