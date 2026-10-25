@@ -1,0 +1,25 @@
+name: setup
+description: Toolchains, system deps and caches, then `just setup`.
+runs:
+  using: composite
+  steps:
+    - name: Tauri system deps (Linux)
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libwebkit2gtk-4.1-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev \
+          librsvg2-dev libayatana-appindicator3-dev patchelf build-essential file
+    - name: Rust (pinned by rust-toolchain.toml)
+      shell: bash
+      run: rustup toolchain install
+    - uses: Swatinem/rust-cache@v2
+    - uses: oven-sh/setup-bun@v2
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 22
+    - uses: taiki-e/install-action@v2
+      with:
+        tool: just
+    - shell: bash
+      run: just setup

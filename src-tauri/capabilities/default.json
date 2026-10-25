@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "The main window: core only. No shell, no filesystem; kizn-app does IO behind the rpc command.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

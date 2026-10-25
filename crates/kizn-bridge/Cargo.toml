@@ -1,0 +1,23 @@
+[package]
+name = "kizn-bridge"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+axum = "0.8.9"
+kizn-app = { path = "../kizn-app" }
+kizn-core = { path = "../kizn-core" }
+kizn-store = { path = "../kizn-store" }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+
+[features]
+# Test-only commands (clock, mock scripting) for the @ui layer. Never in a shipped build.
+test = []

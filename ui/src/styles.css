@@ -1,0 +1,29 @@
+@import "tailwindcss";
+@import "./theme/tokens.css";
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    background-color: var(--color-canvas);
+    color: var(--color-ink-2);
+    font-family: var(--font-sans);
+    font-feature-settings: "cv02", "cv03", "cv04", "ss01";
+    -webkit-font-smoothing: antialiased;
+  }
+
+  pre,
+  code,
+  kbd,
+  samp {
+    font-family: var(--font-mono);
+  }
+
+  ::selection {
+    background-color: color-mix(in oklab, var(--color-accent) 30%, transparent);
+  }
+}

@@ -1,0 +1,19 @@
+[package]
+name = "kizn-store"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+kizn-core = { path = "../kizn-core" }
+rusqlite = { version = "0.41.0", features = ["bundled"] }
+thiserror = "2.0.21"
+
+[dev-dependencies]
+tempfile = "3.27.0"

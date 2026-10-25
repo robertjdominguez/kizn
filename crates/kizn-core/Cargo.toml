@@ -1,0 +1,17 @@
+[package]
+name = "kizn-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+chrono = { version = "0.4.45", default-features = false, features = ["clock", "std", "serde"] }
+rand = "0.10.3"
+serde = { version = "1.0.229", features = ["derive"] }
+ulid = "3.0.0"

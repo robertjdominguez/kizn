@@ -1,0 +1,10 @@
+{
+  "name": "kizn-workspace",
+  "private": true,
+  "type": "module",
+  "workspaces": ["ui", "tests/ui", "tests/smoke"],
+  "devDependencies": {
+    "@biomejs/biome": "^2",
+    "@tauri-apps/cli": "^2"
+  }
+}

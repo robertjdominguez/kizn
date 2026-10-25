@@ -1,0 +1,96 @@
+# Lint, tests and both BDD layers on three OSes; @smoke in the real webview
+# on Linux and Windows; unsigned installers as run artifacts. Every job calls
+# `just`, so CI runs the same commands as a contributor. No job has a model
+# key or reaches a model endpoint.
+
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  lint:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      - run: just lint
+      - name: Generated TS types are current
+        run: just types && git diff --exit-code -- ui/src/bindings
+
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, macos-14, windows-2022]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      - name: Playwright Chromium
+        working-directory: tests/ui
+        run: bunx playwright install --with-deps chromium
+      - run: just test
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report-${{ matrix.os }}
+          path: tests/ui/playwright-report
+          if-no-files-found: ignore
+
+  smoke:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, windows-2022]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      - name: WebKitWebDriver and Xvfb
+        if: runner.os == 'Linux'
+        run: sudo apt-get install -y webkit2gtk-driver xvfb
+      - name: tauri-driver
+        run: cargo install tauri-driver --locked
+      - name: msedgedriver matching the installed Edge
+        if: runner.os == 'Windows'
+        run: |
+          cargo install --git https://github.com/chippers/msedgedriver-tool
+          msedgedriver-tool.exe
+          echo "$PWD" >> "$GITHUB_PATH"
+      - run: just smoke
+
+  bundle:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            artifacts: |
+              target/release/bundle/appimage/*.AppImage
+              target/release/bundle/deb/*.deb
+          - os: macos-14
+            artifacts: target/release/bundle/dmg/*.dmg
+          - os: windows-2022
+            artifacts: target/release/bundle/msi/*.msi
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      - run: just bundle
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kizn-${{ matrix.os }}
+          path: ${{ matrix.artifacts }}
+          if-no-files-found: error

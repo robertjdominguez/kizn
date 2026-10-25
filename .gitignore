@@ -1,0 +1,34 @@
+# Planning: PRD, design notes, discussion. Kept local, never published.
+/planning/
+
+# Local dev data (KIZN_DATA_DIR in `just dev`)
+/.kizn-dev/
+
+# Rust
+/target/
+**/*.rs.bk
+
+# Frontend
+node_modules/
+/ui/dist/
+/ui/.vite/
+
+# Tests
+test-results/
+playwright-report/
+/tests/e2e/.cache/
+
+# Tauri
+/src-tauri/gen/
+/src-tauri/target/
+
+# Editors and OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Secrets
+.env
+.env.*
+!.env.example

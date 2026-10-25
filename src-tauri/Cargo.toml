@@ -1,0 +1,19 @@
+[package]
+name = "kizn"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+kizn-app = { path = "../crates/kizn-app" }
+kizn-core = { path = "../crates/kizn-core" }
+tauri = { version = "2", features = [] }

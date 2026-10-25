@@ -1,0 +1,14 @@
+{
+  "name": "kizn-ui-tests",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "bddgen && playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1",
+    "@types/node": "^24",
+    "playwright-bdd": "^9",
+    "typescript": "^5"
+  }
+}

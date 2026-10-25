@@ -1,0 +1,23 @@
+[package]
+name = "kizn-bdd"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[[test]]
+name = "domain"
+harness = false
+
+[dev-dependencies]
+cucumber = "0.23.0"
+kizn-app = { path = "../../crates/kizn-app" }
+kizn-core = { path = "../../crates/kizn-core" }
+tempfile = "3.27.0"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }

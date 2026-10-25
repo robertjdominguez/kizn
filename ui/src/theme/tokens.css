@@ -1,0 +1,164 @@
+/* ---------------------------------------------------------------------------
+   Design tokens: Catppuccin Mocha (dark) and Latte (light), as in booboo.
+
+   Components only use the semantic aliases (canvas, raised, ink, accent…)
+   and the accents. Each Tailwind colour points at a --k-* variable, and the
+   theme swaps the variables:
+
+     no data-theme   follows the OS (prefers-color-scheme)
+     data-theme=dark / light   the manual override (theme/theme.ts)
+
+   booboo kept its aliases as literal hex because opacity modifiers
+   (bg-raised/50) dropped out through var(). Tailwind 4 compiles them to
+   color-mix(in oklab, var(--color-raised) 50%, transparent), with the solid
+   colour as a fallback; every webview kizn targets supports color-mix().
+
+   Alias map:  canvas=base  raised=surface0  overlay=surface1  subtle=mantle
+               hairline=surface0  hairline-strong=surface1  ink=text
+               ink-2=subtext1  ink-3=subtext0  ink-4=overlay2  accent=blue
+               success=green  warn=yellow  danger=red
+   --------------------------------------------------------------------------- */
+
+@theme {
+  --font-sans: "Inter Variable", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono Variable", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  --color-*: initial;
+  --color-transparent: transparent;
+  --color-black: #000;
+  --color-white: #fff;
+
+  --color-crust: var(--k-crust);
+  --color-mantle: var(--k-mantle);
+  --color-surface-0: var(--k-surface-0);
+  --color-surface-1: var(--k-surface-1);
+  --color-surface-2: var(--k-surface-2);
+  --color-overlay-0: var(--k-overlay-0);
+  --color-overlay-1: var(--k-overlay-1);
+  --color-overlay-2: var(--k-overlay-2);
+
+  --color-rosewater: var(--k-rosewater);
+  --color-flamingo: var(--k-flamingo);
+  --color-pink: var(--k-pink);
+  --color-mauve: var(--k-mauve);
+  --color-red: var(--k-red);
+  --color-maroon: var(--k-maroon);
+  --color-peach: var(--k-peach);
+  --color-yellow: var(--k-yellow);
+  --color-green: var(--k-green);
+  --color-teal: var(--k-teal);
+  --color-sky: var(--k-sky);
+  --color-sapphire: var(--k-sapphire);
+  --color-blue: var(--k-blue);
+  --color-lavender: var(--k-lavender);
+
+  --color-canvas: var(--k-base);
+  --color-raised: var(--k-surface-0);
+  --color-overlay: var(--k-surface-1);
+  --color-subtle: var(--k-mantle);
+  --color-hairline: var(--k-surface-0);
+  --color-hairline-strong: var(--k-surface-1);
+  --color-ink: var(--k-text);
+  --color-ink-2: var(--k-subtext-1);
+  --color-ink-3: var(--k-subtext-0);
+  --color-ink-4: var(--k-overlay-2);
+  --color-accent: var(--k-blue);
+  --color-success: var(--k-green);
+  --color-warn: var(--k-yellow);
+  --color-danger: var(--k-red);
+}
+
+@layer base {
+  :root,
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --k-base: #1e1e2e;
+    --k-mantle: #181825;
+    --k-crust: #11111b;
+    --k-surface-0: #313244;
+    --k-surface-1: #45475a;
+    --k-surface-2: #585b70;
+    --k-overlay-0: #6c7086;
+    --k-overlay-1: #7f849c;
+    --k-overlay-2: #9399b2;
+    --k-subtext-0: #a6adc8;
+    --k-subtext-1: #bac2de;
+    --k-text: #cdd6f4;
+    --k-rosewater: #f5e0dc;
+    --k-flamingo: #f2cdcd;
+    --k-pink: #f5c2e7;
+    --k-mauve: #cba6f7;
+    --k-red: #f38ba8;
+    --k-maroon: #eba0ac;
+    --k-peach: #fab387;
+    --k-yellow: #f9e2af;
+    --k-green: #a6e3a1;
+    --k-teal: #94e2d5;
+    --k-sky: #89dceb;
+    --k-sapphire: #74c7ec;
+    --k-blue: #89b4fa;
+    --k-lavender: #b4befe;
+  }
+
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme]) {
+      color-scheme: light;
+      --k-base: #eff1f5;
+      --k-mantle: #e6e9ef;
+      --k-crust: #dce0e8;
+      --k-surface-0: #ccd0da;
+      --k-surface-1: #bcc0cc;
+      --k-surface-2: #acb0be;
+      --k-overlay-0: #9ca0b0;
+      --k-overlay-1: #8c8fa1;
+      --k-overlay-2: #7c7f93;
+      --k-subtext-0: #6c6f85;
+      --k-subtext-1: #5c5f77;
+      --k-text: #4c4f69;
+      --k-rosewater: #dc8a78;
+      --k-flamingo: #dd7878;
+      --k-pink: #ea76cb;
+      --k-mauve: #8839ef;
+      --k-red: #d20f39;
+      --k-maroon: #e64553;
+      --k-peach: #fe640b;
+      --k-yellow: #df8e1d;
+      --k-green: #40a02b;
+      --k-teal: #179299;
+      --k-sky: #04a5e5;
+      --k-sapphire: #209fb5;
+      --k-blue: #1e66f5;
+      --k-lavender: #7287fd;
+    }
+  }
+
+  :root[data-theme="light"] {
+    color-scheme: light;
+    --k-base: #eff1f5;
+    --k-mantle: #e6e9ef;
+    --k-crust: #dce0e8;
+    --k-surface-0: #ccd0da;
+    --k-surface-1: #bcc0cc;
+    --k-surface-2: #acb0be;
+    --k-overlay-0: #9ca0b0;
+    --k-overlay-1: #8c8fa1;
+    --k-overlay-2: #7c7f93;
+    --k-subtext-0: #6c6f85;
+    --k-subtext-1: #5c5f77;
+    --k-text: #4c4f69;
+    --k-rosewater: #dc8a78;
+    --k-flamingo: #dd7878;
+    --k-pink: #ea76cb;
+    --k-mauve: #8839ef;
+    --k-red: #d20f39;
+    --k-maroon: #e64553;
+    --k-peach: #fe640b;
+    --k-yellow: #df8e1d;
+    --k-green: #40a02b;
+    --k-teal: #179299;
+    --k-sky: #04a5e5;
+    --k-sapphire: #209fb5;
+    --k-blue: #1e66f5;
+    --k-lavender: #7287fd;
+  }
+}

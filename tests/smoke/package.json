@@ -1,0 +1,17 @@
+{
+  "name": "kizn-smoke-tests",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "wdio run wdio.conf.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^24",
+    "@wdio/cli": "^9",
+    "@wdio/cucumber-framework": "^9",
+    "@wdio/globals": "^9",
+    "@wdio/local-runner": "^9",
+    "@wdio/spec-reporter": "^9",
+    "typescript": "^5"
+  }
+}
