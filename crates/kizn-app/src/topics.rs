@@ -61,7 +61,6 @@ fn concepts_schema() -> Value {
 // ---- the model for a role ----------------------------------------------------------
 
 pub(crate) struct RoleModel {
-    #[allow(dead_code)] // recorded on bank batches (the next step)
     pub provider: String,
     pub client: Client,
     pub mode: JsonMode,

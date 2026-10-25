@@ -3,6 +3,7 @@
 //! forward the [`Event`]s from [`App::subscribe`]. The UI's types are
 //! generated from these (`just types`).
 
+mod bank;
 mod command;
 mod config;
 mod events;
@@ -66,6 +67,9 @@ pub struct App {
     ctx: Ctx,
     /// Drafts being drafted, and the flag that stops each between calls.
     drafting: Mutex<HashMap<String, Arc<AtomicBool>>>,
+    /// Wakes the bank writer; it starts on first use (it needs the runtime).
+    bank_wake: Arc<tokio::sync::Notify>,
+    bank_started: AtomicBool,
     _watcher: Option<events::ConfigWatcher>,
 }
 
@@ -94,6 +98,8 @@ impl App {
         Ok(App {
             ctx: Ctx { paths, store: Arc::new(store), deps, events },
             drafting: Mutex::new(HashMap::new()),
+            bank_wake: Arc::new(tokio::sync::Notify::new()),
+            bank_started: AtomicBool::new(false),
             _watcher: watcher,
         })
     }
@@ -107,6 +113,8 @@ impl App {
     }
 
     pub async fn handle(&self, cmd: Command) -> Result<Reply, AppError> {
+        // Picks up banks left mid-write when kizn last closed.
+        self.ensure_bank();
         match cmd {
             Command::GetToday => {
                 let config = Config::load(&self.paths.config_dir)?;
@@ -140,8 +148,18 @@ impl App {
 }
 
 impl App {
-    /// Bank writing arrives in the next step; confirming already queues it.
-    fn wake_bank(&self) {}
+    /// Starts the bank writer if it isn't running yet.
+    fn ensure_bank(&self) {
+        if !self.bank_started.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            tokio::spawn(self.ctx.clone().bank_loop(self.bank_wake.clone()));
+        }
+    }
+
+    /// Wakes the bank writer (starting it if needed).
+    fn wake_bank(&self) {
+        self.ensure_bank();
+        self.bank_wake.notify_one();
+    }
 
     fn retry_bank(&self, outcome_id: &str) -> Result<TopicView, AppError> {
         let o = self.store.outcome(outcome_id)?.ok_or_else(|| AppError::Refused("there's no such outcome".into()))?;

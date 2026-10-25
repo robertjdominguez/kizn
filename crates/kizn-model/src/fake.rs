@@ -289,6 +289,37 @@ const STEMS: [&str; 6] = [
     "In a design discussion touching {c}, which claim stands up?",
 ];
 
+/// Varied settings, so stems written for the same concepts don't overlap.
+const CONTEXTS: [&str; 12] = [
+    "Picture a staging cluster after a Friday deploy.",
+    "Think of a laptop running a quick local test.",
+    "Imagine a nightly batch job on shared hardware.",
+    "Consider a payments service under heavy load.",
+    "Suppose an intern follows the runbook step by step.",
+    "Assume a regulated bank audits every release.",
+    "Take a startup moving fast with one engineer.",
+    "Envision a mirror registry behind a strict firewall.",
+    "Recall a rollback that happened mid-incident.",
+    "Visualise dashboards showing a sudden latency spike.",
+    "Consider vendors shipping images to many customers.",
+    "Imagine edge devices updating over flaky links.",
+];
+const AUDIENCES: [&str; 6] = [
+    "a new teammate",
+    "a customer's architect",
+    "a product manager",
+    "an auditor",
+    "a support engineer",
+    "a skeptical director",
+];
+const SITUATIONS: [&str; 5] = [
+    "has asked for a plain answer",
+    "is deciding whether to approve a release",
+    "is reading an incident report",
+    "is comparing two vendors",
+    "has five minutes before a meeting",
+];
+
 impl FakeServer {
     fn next(&self) -> usize {
         self.written.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
@@ -323,7 +354,8 @@ impl FakeServer {
             }
             "write-items" => {
                 let kind = s("kind");
-                let tier = s("tier");
+                // "remember or understand": a real model picks one.
+                let tier = s("tier").rsplit(" or ").next().unwrap_or("understand").to_string();
                 let count = input["count"].as_u64().unwrap_or(1) as usize;
                 let concepts: Vec<String> = input["concepts"]
                     .as_array()
@@ -340,13 +372,17 @@ impl FakeServer {
                         if kind == "explain" {
                             return json!({
                                 "concepts": named,
-                                "stem": format!("Explain {about} to a colleague who is new to it (prompt {n})."),
+                                "stem": format!("Explain {about} to {} who {}.", AUDIENCES[n % AUDIENCES.len()], SITUATIONS[(n / AUDIENCES.len()) % SITUATIONS.len()]),
                                 "exemplar": format!("A strong answer names {about}, says why it matters in practice, and gives one concrete example."),
                                 "source": "",
                                 "model_knowledge": true,
                             });
                         }
-                        let stem = format!("{} (case {n})", STEMS[n % STEMS.len()].replace("{c}", &about));
+                        let stem = format!(
+                            "{} {}",
+                            CONTEXTS[(n + n / STEMS.len()) % CONTEXTS.len()],
+                            STEMS[n % STEMS.len()].replace("{c}", &about)
+                        );
                         let key = if b == Behaviour::LongestCue && i == 0 {
                             "This is how it works in practice, every time, on every host, whatever the registry or tag says about it"
                         } else {

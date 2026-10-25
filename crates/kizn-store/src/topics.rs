@@ -345,6 +345,12 @@ impl Store {
         Ok(())
     }
 
+    /// How many writing runs an outcome has had (finished or not).
+    pub fn batch_count(&self, outcome_id: &str) -> Result<i64> {
+        let conn = self.conn.lock().unwrap();
+        Ok(conn.query_row("SELECT count(*) FROM item_batches WHERE outcome_id = ?1", [outcome_id], |r| r.get(0))?)
+    }
+
     /// Accepted counts of an outcome's last `n` finished batches, newest
     /// first: two zeros in a row means back off.
     pub fn recent_batch_accepts(&self, outcome_id: &str, n: i64) -> Result<Vec<i64>> {

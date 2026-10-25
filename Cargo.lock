@@ -2727,6 +2727,7 @@ dependencies = [
  "kizn-app",
  "kizn-core",
  "kizn-model",
+ "kizn-store",
  "tempfile",
  "tokio",
 ]
