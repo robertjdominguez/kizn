@@ -89,7 +89,7 @@ impl App {
             Command::GetToday => {
                 let config = Config::load(&self.paths.config_dir)?;
                 let topics =
-                    self.store.topics()?.into_iter().map(|t| TopicSummary { id: t.id, title: t.title }).collect();
+                    self.store.all_topics()?.into_iter().map(|t| TopicSummary { id: t.id, title: t.title }).collect();
                 Ok(Reply::Today(TodayView { topics, model_configured: config.model_configured() }))
             }
             Command::GetAppInfo => Ok(Reply::AppInfo(AppInfo {
