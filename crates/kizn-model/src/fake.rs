@@ -151,7 +151,7 @@ async fn handle(
     let req: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
     let task = kizn_task(&req);
     if task.is_some() && behaviour == Behaviour::Slow {
-        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+        tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
     }
     let answer = task.and_then(|(task, input)| server.answer(task, &input, behaviour));
     match (method, rest.as_str()) {

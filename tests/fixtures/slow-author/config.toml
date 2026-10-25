@@ -1,0 +1,15 @@
+# Seeded by `just seed slow-author`. {{FAKE}} is the fake model server.
+[providers.slow]
+protocol = "openai"
+base_url = "{{FAKE}}/slow/v1"
+model = "slow-27b"
+
+[providers.local]
+protocol = "openai"
+base_url = "{{FAKE}}/works/v1"
+model = "qwen3:32b"
+
+[roles]
+author = "slow"
+checker = "local"
+tutor = "local"
