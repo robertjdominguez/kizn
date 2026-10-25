@@ -26,6 +26,7 @@ toml_edit = "0.25.17"
 ts-rs = { version = "12", features = ["serde-compat"] }
 
 [dev-dependencies]
+chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 kizn-model = { path = "../kizn-model", features = ["fake"] }
 tempfile = "3.27.0"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

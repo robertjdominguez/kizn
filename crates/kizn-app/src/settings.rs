@@ -337,3 +337,112 @@ fn keychain_error(e: String) -> AppError {
          in config.toml."
     ))
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use kizn_core::{FakeClock, SeededRng};
+    use kizn_model::fake::{Behaviour, FakeServer};
+
+    use super::*;
+    use crate::{AppDeps, MemorySecrets, Paths};
+
+    fn check(reachable: bool, structured: Structured, streaming: bool) -> Check {
+        Check { reachable, structured, streaming, summary: String::new(), problems: vec![] }
+    }
+
+    #[test]
+    fn roles_follow_what_the_test_showed() {
+        use Role::*;
+        assert_eq!(roles_for(&check(true, Structured::Native, true)), vec![Author, Checker, Tutor]);
+        assert_eq!(roles_for(&check(true, Structured::Prompted, true)), vec![Author, Checker, Tutor]);
+        assert_eq!(roles_for(&check(true, Structured::None, true)), vec![Tutor]);
+        assert_eq!(roles_for(&check(true, Structured::Native, false)), vec![Author, Checker]);
+        assert_eq!(roles_for(&check(false, Structured::Native, true)), vec![]);
+    }
+
+    async fn app() -> (App, FakeServer, tempfile::TempDir) {
+        let fake = FakeServer::start(0).await.unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let deps = AppDeps {
+            clock: Arc::new(FakeClock::at(chrono::DateTime::from_timestamp(1_790_000_000, 0).unwrap())),
+            rng: Arc::new(SeededRng::from_seed(1)),
+            secrets: Arc::new(MemorySecrets::default()),
+            http: fake.client(),
+        };
+        (App::open(Paths::in_dir(dir.path()), deps).unwrap(), fake, dir)
+    }
+
+    fn refused(r: Result<SettingsView, AppError>) -> String {
+        match r {
+            Err(AppError::Refused(why)) => why,
+            other => panic!("expected a refusal, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_role_needs_a_test_that_supports_it() {
+        let (app, fake, _dir) = app().await;
+        app.save_provider("chatty", "openai", &fake.openai_url(Behaviour::NoJson), "m", None, None).unwrap();
+        let why = refused(app.assign_role(Role::Tutor, Some("chatty")));
+        assert!(why.contains("hasn't been tested"), "{why}");
+        app.test_provider("chatty").await.unwrap();
+        let why = refused(app.assign_role(Role::Author, Some("chatty")));
+        assert!(why.contains("can't be the author"), "{why}");
+        assert!(app.assign_role(Role::Tutor, Some("chatty")).is_ok());
+        let why = refused(app.assign_role(Role::Tutor, Some("nobody")));
+        assert!(why.contains("no provider called nobody"), "{why}");
+    }
+
+    #[tokio::test]
+    async fn changing_a_provider_retires_its_test() {
+        let (app, fake, dir) = app().await;
+        app.save_provider("local", "openai", &fake.openai_url(Behaviour::Works), "m", None, None).unwrap();
+        let v = app.test_provider("local").await.unwrap();
+        assert!(v.providers[0].check.is_some());
+        // A hand edit to the model: the old test no longer describes it.
+        let path = dir.path().join(crate::CONFIG_FILE);
+        let text = std::fs::read_to_string(&path).unwrap().replace("model = \"m\"", "model = \"other\"");
+        std::fs::write(&path, text).unwrap();
+        let v = app.settings().unwrap();
+        assert!(v.providers[0].check.is_none(), "the test still applies after the model changed");
+        let why = refused(app.assign_role(Role::Author, Some("local")));
+        assert!(why.contains("hasn't been tested"), "{why}");
+    }
+
+    #[tokio::test]
+    async fn a_key_written_into_config_is_refused() {
+        let (app, fake, dir) = app().await;
+        let text = format!(
+            "[providers.leaky]\nprotocol = \"openai\"\nbase_url = \"{}\"\nmodel = \"m\"\nkey = \"sk-in-the-file\"\n",
+            fake.openai_url(Behaviour::Works)
+        );
+        std::fs::write(dir.path().join(crate::CONFIG_FILE), text).unwrap();
+        let v = app.settings().unwrap();
+        assert!(matches!(v.providers[0].key, KeyView::Refused { .. }));
+        let why = match app.test_provider("leaky").await {
+            Err(AppError::Refused(why)) => why,
+            other => panic!("expected a refusal, got {other:?}"),
+        };
+        assert!(why.contains("only reads keys from the keychain"), "{why}");
+    }
+
+    #[tokio::test]
+    async fn a_saved_key_goes_to_the_keychain_and_removing_the_provider_deletes_it() {
+        let (app, fake, _dir) = app().await;
+        app.save_provider("claude", "anthropic", &fake.anthropic_url(Behaviour::Works), "m", Some("sk-x"), None)
+            .unwrap();
+        assert_eq!(app.deps.secrets.get("claude").unwrap().as_deref(), Some("sk-x"));
+        app.remove_provider("claude").unwrap();
+        assert_eq!(app.deps.secrets.get("claude").unwrap(), None);
+    }
+
+    #[test]
+    fn names_and_protocols_are_checked_in_plain_words() {
+        assert!(validate_name("gpu-box_2").is_ok());
+        assert!(validate_name("GPU Box").is_err());
+        let why = parse_protocol("gemini").unwrap_err().to_string();
+        assert!(why.contains("isn't one of them"), "{why}");
+    }
+}
