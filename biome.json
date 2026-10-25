@@ -6,7 +6,15 @@
     "useIgnoreFile": true
   },
   "files": {
-    "includes": ["ui/**", "tests/ui/**", "tests/smoke/**", "!ui/src/bindings", "!**/.features-gen", "!**/dist"]
+    "includes": [
+      "ui/**",
+      "tests/ui/**",
+      "tests/smoke/**",
+      "!ui/src/bindings",
+      "!**/.features-gen",
+      "!**/dist",
+      "site/**"
+    ]
   },
   "formatter": {
     "indentStyle": "space",

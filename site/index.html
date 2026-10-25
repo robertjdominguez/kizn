@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>kizn</title>
+    <meta name="description" content="A desktop app for learning something properly." />
+    <style>
+      :root {
+        color-scheme: dark;
+        --canvas: #1e1e2e;
+        --subtle: #181825;
+        --hairline: #313244;
+        --ink: #cdd6f4;
+        --ink-3: #a6adc8;
+        --teal: #94e2d5;
+      }
+      @media (prefers-color-scheme: light) {
+        :root {
+          color-scheme: light;
+          --canvas: #eff1f5;
+          --subtle: #e6e9ef;
+          --hairline: #ccd0da;
+          --ink: #4c4f69;
+          --ink-3: #6c6f85;
+          --teal: #179299;
+        }
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        padding: 24px 16px;
+        background: var(--canvas);
+        color: var(--ink-3);
+        font: 16px/1.6 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+      }
+      main { width: 100%; max-width: 560px; display: flex; flex-direction: column; gap: 20px; }
+      h1 { margin: 0; color: var(--ink); font-size: 28px; letter-spacing: -0.02em; }
+      p { margin: 0; }
+      .install {
+        border: 1px solid var(--hairline);
+        background: var(--subtle);
+        border-radius: 8px;
+        padding: 14px 16px;
+        font-size: 14px;
+      }
+      a { color: var(--teal); }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>kizn</h1>
+      <p>
+        A desktop app for learning something properly. A model you choose writes practice ahead of time; code grades
+        it, schedules it, and tells you plainly what's left before you're ready.
+      </p>
+      <!-- Phase 1 replaces this with the install lines (install.sh, install.ps1). -->
+      <div class="install">Not released yet. A one-line install for macOS, Linux and Windows comes with v0.1.0.</div>
+      <p><a href="https://github.com/robertjdominguez/kizn">Source on GitHub</a> · AGPL-3.0</p>
+    </main>
+  </body>
+</html>

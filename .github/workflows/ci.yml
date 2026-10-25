@@ -63,12 +63,19 @@ jobs:
         run: sudo apt-get install -y webkit2gtk-driver xvfb
       - name: tauri-driver
         run: cargo install tauri-driver --locked
-      - name: msedgedriver matching the installed Edge
+      # The driver must match the WebView2 runtime the app runs in, not the
+      # Edge browser (they're versioned separately on the runners).
+      - name: msedgedriver matching the WebView2 runtime
         if: runner.os == 'Windows'
+        shell: pwsh
         run: |
-          cargo install --git https://github.com/chippers/msedgedriver-tool
-          msedgedriver-tool.exe
-          echo "$PWD" >> "$GITHUB_PATH"
+          $key = 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
+          $version = (Get-ItemProperty -Path $key).pv
+          Write-Host "WebView2 runtime $version"
+          $dir = Join-Path $env:RUNNER_TEMP 'msedgedriver'
+          Invoke-WebRequest "https://msedgedriver.microsoft.com/$version/edgedriver_win64.zip" -OutFile "$dir.zip"
+          Expand-Archive "$dir.zip" -DestinationPath $dir
+          Add-Content $env:GITHUB_PATH $dir
       - run: just smoke
 
   bundle:
