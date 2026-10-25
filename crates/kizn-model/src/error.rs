@@ -13,6 +13,10 @@ pub enum ModelError {
     KeyRefused(u16),
     #[error("the endpoint doesn't have the model {0}")]
     UnknownModel(String),
+    /// The key works, but the account can't run requests: no credit, quota
+    /// used up, billing not set up.
+    #[error("the account can't run requests yet: {0}")]
+    Account(String),
     #[error("the endpoint doesn't accept a JSON schema")]
     SchemaUnsupported,
     #[error("the endpoint answered HTTP {status}: {detail}")]
@@ -48,6 +52,10 @@ impl ModelError {
     /// From an error status: the common ones get their own words.
     pub(crate) fn from_status(status: u16, body: &str, model: &str) -> ModelError {
         let lower = body.to_lowercase();
+        let account = ["credit balance", "insufficient_quota", "billing", "quota", "payment"];
+        if status == 402 || ((status == 400 || status == 429) && account.iter().any(|w| lower.contains(w))) {
+            return ModelError::Account(snippet(body));
+        }
         match status {
             401 | 403 => ModelError::KeyRefused(status),
             404 if lower.contains("model") => ModelError::UnknownModel(model.to_string()),

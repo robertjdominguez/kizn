@@ -73,22 +73,16 @@ pub async fn probe(client: &Client) -> Check {
                     problems.push("its JSON didn't have the fields kizn asked for".into());
                     Structured::None
                 }
-                Err(e) => {
+                Err(ModelError::BadReply(e)) => {
                     problems.push(format!("no structured output: {e}"));
                     Structured::None
                 }
+                // Not about JSON at all (account, model, server): say what it was.
+                Err(e) => return failed(e),
             }
         }
-        Err(e) => {
-            // Reachable but the model call itself failed (key, model, status).
-            return Check {
-                reachable: true,
-                structured: Structured::None,
-                streaming: false,
-                summary: e.to_string(),
-                problems: vec![e.to_string()],
-            };
-        }
+        // Reachable, but the model call itself failed (account, model, status).
+        Err(e) => return failed(e),
     };
 
     // 3. Streaming: the first delta is enough.
@@ -125,4 +119,15 @@ pub async fn probe(client: &Client) -> Check {
         (Structured::None, false) => "answers, but can't return structured output or stream".into(),
     };
     Check { reachable: true, structured, streaming, summary, problems }
+}
+
+/// Reached the endpoint, but it won't run a request: that's the whole story.
+fn failed(e: ModelError) -> Check {
+    Check {
+        reachable: true,
+        structured: Structured::None,
+        streaming: false,
+        summary: e.to_string(),
+        problems: vec![e.to_string()],
+    }
 }

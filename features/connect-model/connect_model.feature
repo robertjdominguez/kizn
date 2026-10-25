@@ -42,3 +42,10 @@ Feature: Connect a model
     Given kizn is open on Settings
     When I add a provider to config.toml by hand
     Then Settings shows it without a restart
+
+  @domain
+  Scenario: An account that can't pay for requests
+    Given a provider whose account has no credit
+    When I test the connection
+    Then I see that the account can't run requests yet, in the provider's own words
+    And no role can be assigned to it

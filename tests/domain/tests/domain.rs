@@ -226,6 +226,12 @@ async fn provider_prompted(w: &mut Kizn) {
     w.add_provider("parsed", "openai", &url, "m", None).await;
 }
 
+#[given("a provider whose account has no credit")]
+async fn provider_no_credit(w: &mut Kizn) {
+    let url = w.fake.anthropic_url(Behaviour::NoCredit);
+    w.add_provider("broke", "anthropic", &url, "m", Some(TEST_KEY)).await;
+}
+
 #[when("I test the connection")]
 async fn test_connection(w: &mut Kizn) {
     let name = w.provider.clone().expect("no provider to test");
@@ -259,6 +265,17 @@ fn key_by_name(w: &mut Kizn) {
     assert!(text.contains("key = \"keychain:kizn/claude\""), "{text}");
     assert!(!text.contains(TEST_KEY), "the key itself is in config.toml:\n{text}");
     assert_eq!(w.secrets.get("claude").unwrap().as_deref(), Some(TEST_KEY), "the key isn't in the keychain");
+}
+
+#[then("I see that the account can't run requests yet, in the provider's own words")]
+fn account_cant_run(w: &mut Kizn) {
+    let c = w.current_check();
+    assert!(c.reachable, "the provider was reached");
+    assert!(
+        c.summary.starts_with("the account can't run requests yet: Your credit balance is too low"),
+        "{}",
+        c.summary
+    );
 }
 
 #[then("I see that nothing answered at that address")]

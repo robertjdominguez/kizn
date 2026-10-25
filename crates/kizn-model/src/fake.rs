@@ -30,16 +30,19 @@ pub enum Behaviour {
     Unauthorized,
     /// 404 "model not found" on completions.
     UnknownModel,
+    /// Lists models, but refuses every request: no credit (Anthropic's 400).
+    NoCredit,
 }
 
 impl Behaviour {
-    pub const ALL: [Behaviour; 6] = [
+    pub const ALL: [Behaviour; 7] = [
         Behaviour::Works,
         Behaviour::PromptedJson,
         Behaviour::NoJson,
         Behaviour::NoStream,
         Behaviour::Unauthorized,
         Behaviour::UnknownModel,
+        Behaviour::NoCredit,
     ];
 
     pub fn name(self) -> &'static str {
@@ -50,6 +53,7 @@ impl Behaviour {
             Behaviour::NoStream => "no-stream",
             Behaviour::Unauthorized => "unauthorized",
             Behaviour::UnknownModel => "unknown-model",
+            Behaviour::NoCredit => "no-credit",
         }
     }
 
@@ -139,6 +143,8 @@ async fn handle(
     }
 }
 
+const NO_CREDIT: &str = "Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.";
+
 const ANSWER: &str = r#"{"ok": true, "word": "kizn"}"#;
 const PROSE: &str = "Sure! I'd be happy to help with that. kizn works.";
 
@@ -157,6 +163,9 @@ fn asks_for_json(req: &Value) -> bool {
 }
 
 fn openai(b: Behaviour, req: &Value) -> Response {
+    if b == Behaviour::NoCredit {
+        return error(StatusCode::BAD_REQUEST, NO_CREDIT);
+    }
     if b == Behaviour::UnknownModel {
         return error(StatusCode::NOT_FOUND, "model not found");
     }
@@ -185,6 +194,9 @@ fn openai(b: Behaviour, req: &Value) -> Response {
 }
 
 fn anthropic(b: Behaviour, req: &Value) -> Response {
+    if b == Behaviour::NoCredit {
+        return error(StatusCode::BAD_REQUEST, NO_CREDIT);
+    }
     if b == Behaviour::UnknownModel {
         return error(StatusCode::NOT_FOUND, "model: not found");
     }
@@ -239,6 +251,12 @@ mod tests {
             assert_eq!((c.structured, c.streaming), (Structured::Native, false), "{protocol:?}");
             let c = check(&s, protocol, url(Behaviour::Unauthorized)).await;
             assert!(!c.reachable && c.summary.contains("refused the key"), "{protocol:?}: {}", c.summary);
+            let c = check(&s, protocol, url(Behaviour::NoCredit)).await;
+            assert!(
+                c.reachable && c.summary.starts_with("the account can't run requests yet: Your credit balance"),
+                "{protocol:?}: {}",
+                c.summary
+            );
             let c = check(&s, protocol, url(Behaviour::UnknownModel)).await;
             assert!(c.summary.contains("doesn't have the model m"), "{protocol:?}: {}", c.summary);
         }
