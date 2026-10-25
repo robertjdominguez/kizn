@@ -116,7 +116,9 @@ pub async fn probe(client: &Client) -> Check {
     let summary = match (structured, streaming) {
         (Structured::Native, true) => "works".to_string(),
         (Structured::Prompted, true) => "works; no schema-constrained output, kizn will parse instead".to_string(),
-        (Structured::None, true) => "answers, but can't return structured output: it can tutor, not author items".into(),
+        (Structured::None, true) => {
+            "answers, but can't return structured output: it can tutor, not author items".into()
+        }
         (Structured::Native | Structured::Prompted, false) => {
             "can return structured output, but can't stream: it can author items, not tutor".into()
         }

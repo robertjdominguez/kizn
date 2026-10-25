@@ -17,8 +17,8 @@ use kizn_store::Store;
 use tokio::sync::broadcast;
 
 pub use command::{
-    AppError, AppInfo, CheckView, Command, Event, KeyView, ProviderView, Reply, Role, RolesView, SettingsView, TodayView,
-    TopicSummary,
+    AppError, AppInfo, CheckView, Command, Event, KeyView, ProviderView, Reply, Role, RolesView, SettingsView,
+    TodayView, TopicSummary,
 };
 pub use config::{CONFIG_FILE, Config};
 pub use kizn_model::Http;
@@ -88,12 +88,8 @@ impl App {
         match cmd {
             Command::GetToday => {
                 let config = Config::load(&self.paths.config_dir)?;
-                let topics = self
-                    .store
-                    .topics()?
-                    .into_iter()
-                    .map(|t| TopicSummary { id: t.id, title: t.title })
-                    .collect();
+                let topics =
+                    self.store.topics()?.into_iter().map(|t| TopicSummary { id: t.id, title: t.title }).collect();
                 Ok(Reply::Today(TodayView { topics, model_configured: config.model_configured() }))
             }
             Command::GetAppInfo => Ok(Reply::AppInfo(AppInfo {
@@ -106,10 +102,9 @@ impl App {
             Command::SaveProvider { name, protocol, base_url, model, key, preset } => self
                 .save_provider(&name, &protocol, &base_url, &model, key.as_deref(), preset.as_deref())
                 .map(Reply::Settings),
-            Command::ListModels { protocol, base_url, key, name } => self
-                .list_models(&protocol, &base_url, key.as_deref(), name.as_deref())
-                .await
-                .map(Reply::Models),
+            Command::ListModels { protocol, base_url, key, name } => {
+                self.list_models(&protocol, &base_url, key.as_deref(), name.as_deref()).await.map(Reply::Models)
+            }
             Command::RemoveProvider { name } => self.remove_provider(&name).map(Reply::Settings),
             Command::TestProvider { name } => self.test_provider(&name).await.map(Reply::Settings),
             Command::AssignRole { role, provider } => self.assign_role(role, provider.as_deref()).map(Reply::Settings),

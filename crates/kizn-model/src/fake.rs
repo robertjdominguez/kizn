@@ -165,10 +165,8 @@ fn openai(b: Behaviour, req: &Value) -> Response {
         if b == Behaviour::NoStream {
             return error(StatusCode::INTERNAL_SERVER_ERROR, "streaming is broken here");
         }
-        let mut events: Vec<String> = ["kizn ", "works."]
-            .iter()
-            .map(|t| json!({"choices": [{"delta": {"content": t}}]}).to_string())
-            .collect();
+        let mut events: Vec<String> =
+            ["kizn ", "works."].iter().map(|t| json!({"choices": [{"delta": {"content": t}}]}).to_string()).collect();
         events.push("[DONE]".into());
         return sse(events);
     }
@@ -229,7 +227,11 @@ mod tests {
         for protocol in [Protocol::OpenAi, Protocol::Anthropic] {
             let url = |b| if protocol == Protocol::OpenAi { s.openai_url(b) } else { s.anthropic_url(b) };
             let c = check(&s, protocol, url(Behaviour::Works)).await;
-            assert_eq!((c.structured, c.streaming, c.summary.as_str()), (Structured::Native, true, "works"), "{protocol:?}");
+            assert_eq!(
+                (c.structured, c.streaming, c.summary.as_str()),
+                (Structured::Native, true, "works"),
+                "{protocol:?}"
+            );
             let c = check(&s, protocol, url(Behaviour::PromptedJson)).await;
             assert_eq!((c.structured, c.streaming), (Structured::Prompted, true), "{protocol:?}");
             let c = check(&s, protocol, url(Behaviour::NoJson)).await;

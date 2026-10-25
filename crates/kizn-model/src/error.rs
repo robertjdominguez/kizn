@@ -59,7 +59,12 @@ impl ModelError {
 /// `scheme://host:port` of a URL: what "nothing answered at" names.
 fn origin(url: &str) -> String {
     match reqwest::Url::parse(url) {
-        Ok(u) => format!("{}://{}{}", u.scheme(), u.host_str().unwrap_or(""), u.port().map(|p| format!(":{p}")).unwrap_or_default()),
+        Ok(u) => format!(
+            "{}://{}{}",
+            u.scheme(),
+            u.host_str().unwrap_or(""),
+            u.port().map(|p| format!(":{p}")).unwrap_or_default()
+        ),
         Err(_) => url.to_string(),
     }
 }
@@ -69,8 +74,14 @@ fn origin(url: &str) -> String {
 fn snippet(body: &str) -> String {
     let msg = serde_json::from_str::<serde_json::Value>(body)
         .ok()
-        .and_then(|v| v.pointer("/error/message").or_else(|| v.get("message")).and_then(|m| m.as_str()).map(str::to_string))
+        .and_then(|v| {
+            v.pointer("/error/message").or_else(|| v.get("message")).and_then(|m| m.as_str()).map(str::to_string)
+        })
         .unwrap_or_else(|| body.lines().next().unwrap_or("").to_string());
     let msg = msg.trim();
-    if msg.chars().count() > 160 { format!("{}…", msg.chars().take(160).collect::<String>()) } else { msg.to_string() }
+    if msg.chars().count() > 160 {
+        format!("{}…", msg.chars().take(160).collect::<String>())
+    } else {
+        msg.to_string()
+    }
 }

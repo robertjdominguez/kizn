@@ -229,8 +229,7 @@ impl Client {
                     "stream": false,
                 });
                 if mode == JsonMode::Native {
-                    body["response_format"] =
-                        json!({"type": "json_schema", "json_schema": {"name": "reply", "schema": schema, "strict": true}});
+                    body["response_format"] = json!({"type": "json_schema", "json_schema": {"name": "reply", "schema": schema, "strict": true}});
                 }
                 let v = self.post_json("chat/completions", &body, mode).await?;
                 let content = v.pointer("/choices/0/message/content").and_then(|c| c.as_str()).unwrap_or_default();
@@ -248,7 +247,8 @@ impl Client {
                     "messages": [{"role": "user", "content": user}],
                 });
                 if mode == JsonMode::Native {
-                    body["tools"] = json!([{"name": "reply", "description": "Give the reply.", "input_schema": schema}]);
+                    body["tools"] =
+                        json!([{"name": "reply", "description": "Give the reply.", "input_schema": schema}]);
                     body["tool_choice"] = json!({"type": "tool", "name": "reply"});
                 }
                 let v = self.post_json("messages", &body, mode).await?;
@@ -319,9 +319,9 @@ impl Client {
             let v: Value = serde_json::from_str(&data).ok()?;
             let delta = match protocol {
                 Protocol::OpenAi => v.pointer("/choices/0/delta/content").and_then(|c| c.as_str()),
-                Protocol::Anthropic => {
-                    (v["type"] == "content_block_delta").then(|| v.pointer("/delta/text").and_then(|t| t.as_str())).flatten()
-                }
+                Protocol::Anthropic => (v["type"] == "content_block_delta")
+                    .then(|| v.pointer("/delta/text").and_then(|t| t.as_str()))
+                    .flatten(),
             };
             delta.filter(|d| !d.is_empty()).map(|d| Ok(d.to_string()))
         }))
@@ -339,7 +339,8 @@ pub fn parse_json_object(text: &str) -> Result<Value, ModelError> {
     if e <= s {
         return Err(ModelError::BadReply("no JSON object in the reply".into()));
     }
-    let v: Value = serde_json::from_str(&text[s..=e]).map_err(|e| ModelError::BadReply(format!("invalid JSON: {e}")))?;
+    let v: Value =
+        serde_json::from_str(&text[s..=e]).map_err(|e| ModelError::BadReply(format!("invalid JSON: {e}")))?;
     if !v.is_object() {
         return Err(ModelError::BadReply("the reply isn't a JSON object".into()));
     }

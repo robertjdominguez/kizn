@@ -141,7 +141,8 @@ async fn serve() {
         } else {
             std::env::var("KIZN_FAKE_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(7880)
         };
-        let fake = FakeServer::start(port).await.unwrap_or_else(|e| exit(format!("can't start the fake model server: {e}")));
+        let fake =
+            FakeServer::start(port).await.unwrap_or_else(|e| exit(format!("can't start the fake model server: {e}")));
         deps.http = fake.client();
         deps.secrets = Arc::new(MemorySecrets::default());
         eprintln!(

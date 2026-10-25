@@ -172,7 +172,10 @@ impl App {
 
     pub(crate) async fn test_provider(&self, name: &str) -> Result<SettingsView, AppError> {
         let config = Config::load(&self.paths.config_dir)?;
-        let p = config.providers.get(name).ok_or_else(|| AppError::Refused(format!("there's no provider called {name}")))?;
+        let p = config
+            .providers
+            .get(name)
+            .ok_or_else(|| AppError::Refused(format!("there's no provider called {name}")))?;
         let endpoint = Endpoint {
             protocol: parse_protocol(&p.protocol)?,
             base_url: base_url(p),
@@ -189,7 +192,8 @@ impl App {
         })?;
         // Roles nobody has yet go to the first provider that can take them.
         let allowed = roles_for(&check);
-        let unset: Vec<Role> = Role::ALL.into_iter().filter(|r| config.roles.get(*r).is_none() && allowed.contains(r)).collect();
+        let unset: Vec<Role> =
+            Role::ALL.into_iter().filter(|r| config.roles.get(*r).is_none() && allowed.contains(r)).collect();
         if !unset.is_empty() {
             let mut edit = ConfigEdit::open(&self.paths.config_dir)?;
             for role in unset {
@@ -230,9 +234,9 @@ impl App {
         match self.key_view(name, p) {
             KeyView::None => Ok(None),
             KeyView::Refused { reason } => Err(AppError::Refused(reason)),
-            KeyView::Env { var, .. } => std::env::var(&var)
-                .map(Some)
-                .map_err(|_| AppError::Refused(format!("{name}'s key should be in the environment variable {var}, which isn't set"))),
+            KeyView::Env { var, .. } => std::env::var(&var).map(Some).map_err(|_| {
+                AppError::Refused(format!("{name}'s key should be in the environment variable {var}, which isn't set"))
+            }),
             KeyView::Keychain { .. } => {
                 let account = &p.key.as_deref().unwrap_or_default()[KEYCHAIN_PREFIX.len()..];
                 match self.deps.secrets.get(account).map_err(keychain_error)? {
