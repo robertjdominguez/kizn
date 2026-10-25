@@ -2181,7 +2181,7 @@ dependencies = [
 
 [[package]]
 name = "kizn"
-version = "0.1.0-rc.1"
+version = "0.1.0-rc.2"
 dependencies = [
  "kizn-app",
  "kizn-core",
@@ -2191,7 +2191,7 @@ dependencies = [
 
 [[package]]
 name = "kizn-app"
-version = "0.1.0-rc.1"
+version = "0.1.0-rc.2"
 dependencies = [
  "directories",
  "kizn-core",
@@ -2207,7 +2207,7 @@ dependencies = [
 
 [[package]]
 name = "kizn-bdd"
-version = "0.1.0-rc.1"
+version = "0.1.0-rc.2"
 dependencies = [
  "chrono",
  "cucumber",
@@ -2219,7 +2219,7 @@ dependencies = [
 
 [[package]]
 name = "kizn-bridge"
-version = "0.1.0-rc.1"
+version = "0.1.0-rc.2"
 dependencies = [
  "axum",
  "kizn-app",
@@ -2231,7 +2231,7 @@ dependencies = [
 
 [[package]]
 name = "kizn-core"
-version = "0.1.0-rc.1"
+version = "0.1.0-rc.2"
 dependencies = [
  "chrono",
  "rand",
@@ -2241,7 +2241,7 @@ dependencies = [
 
 [[package]]
 name = "kizn-install-tests"
-version = "0.1.0-rc.1"
+version = "0.1.0-rc.2"
 dependencies = [
  "axum",
  "cucumber",
@@ -2256,7 +2256,7 @@ dependencies = [
 
 [[package]]
 name = "kizn-store"
-version = "0.1.0-rc.1"
+version = "0.1.0-rc.2"
 dependencies = [
  "kizn-core",
  "rusqlite",
