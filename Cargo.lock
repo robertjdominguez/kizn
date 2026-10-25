@@ -2752,7 +2752,9 @@ version = "0.1.0-rc.2"
 dependencies = [
  "chrono",
  "rand 0.10.3",
+ "regex",
  "serde",
+ "serde_json",
  "ulid",
 ]
 
