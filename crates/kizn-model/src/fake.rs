@@ -68,8 +68,7 @@ impl FakeServer {
     /// Starts on 127.0.0.1 (port 0 picks a free one).
     pub async fn start(port: u16) -> std::io::Result<FakeServer> {
         let listener = tokio::net::TcpListener::bind(("127.0.0.1", port)).await?;
-        let mut server = FakeServer::default();
-        server.addr = Some(listener.local_addr()?);
+        let server = FakeServer { addr: Some(listener.local_addr()?), ..FakeServer::default() };
         let state = server.clone();
         tokio::spawn(async move {
             let app = axum::Router::new().fallback(handle).with_state(state);
