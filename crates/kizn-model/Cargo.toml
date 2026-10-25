@@ -1,0 +1,29 @@
+[package]
+name = "kizn-model"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+axum = { version = "0.8.9", optional = true }
+bytes = "1.12.1"
+futures-util = "0.3.34"
+reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "json", "stream", "http2"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+thiserror = "2.0.21"
+tokio = { version = "1.54.1", features = ["time", "sync", "macros", "rt"] }
+tokio-stream = { version = "0.1.19", optional = true }
+
+[lints]
+workspace = true
+
+[features]
+# The fake model server: tests, the dev bridge's mock mode. Never shipped.
+fake = ["dep:axum", "dep:tokio-stream", "tokio/net"]
+
+[dev-dependencies]
+tokio = { version = "1.54.1", features = ["full"] }

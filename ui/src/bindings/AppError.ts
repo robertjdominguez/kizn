@@ -3,4 +3,4 @@
 /**
  * What went wrong, in words the UI can show as they are.
  */
-export type AppError = { "kind": "store", "message": string } | { "kind": "config", "message": string } | { "kind": "io", "message": string };
+export type AppError = { "kind": "store", "message": string } | { "kind": "config", "message": string } | { "kind": "io", "message": string } | { "kind": "refused", "message": string };

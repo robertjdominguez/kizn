@@ -1,0 +1,2 @@
+A provider whose model answers in prose, never JSON (run with `just dev mock`).
+It can be the tutor; it can't be the author or the checker.

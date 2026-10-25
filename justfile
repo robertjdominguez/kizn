@@ -77,7 +77,7 @@ doctor:
       printf "  %-16s %s\n" "operator" "${op:-not set: sudo tailscale set --operator=\$USER (for just dev tailnet)}"
     fi
 
-# Browser loop: bridge + Vite on localhost. `mock` (phase 2+), `tailnet` serves it on this host's Tailscale name
+# Browser loop: bridge + Vite on localhost. `mock`: models are the fake model server. `tailnet`: serve on this host's Tailscale name
 dev *args:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -89,7 +89,6 @@ dev *args:
         *) echo "just dev: unknown option '$a' (mock, tailnet)"; exit 2 ;;
       esac
     done
-    [[ $mock == 1 ]] && echo "note: the mock provider arrives in phase 2; 'mock' does nothing yet"
     cargo build -q -p kizn-bridge
     mkdir -p "{{ dev_dir }}"
     pids=()
@@ -100,7 +99,8 @@ dev *args:
       if [[ $tailnet == 1 ]]; then tailscale serve --https=443 off >/dev/null 2>&1 || true; echo "tailscale serve: off"; fi
     }
     trap cleanup EXIT INT TERM
-    KIZN_DATA_DIR="{{ dev_dir }}" KIZN_CONFIG_DIR="{{ dev_dir }}" "{{ bridge }}" &
+    # mock: model traffic goes to the fake model server (127.0.0.1:7880), keys stay in memory.
+    KIZN_MOCK=$mock KIZN_DATA_DIR="{{ dev_dir }}" KIZN_CONFIG_DIR="{{ dev_dir }}" "{{ bridge }}" &
     pids+=($!)
     if [[ $tailnet == 1 ]]; then
       # Tailnet only. Never `tailscale funnel`, which is public.
@@ -256,6 +256,24 @@ release version:
     echo "Committed and tagged v$v."
     read -r -p "Push main and v$v to origin (CI builds and drafts the release)? [y/N] " a
     if [[ "$a" == y || "$a" == Y ]]; then git push origin main "v$v"; else echo "Not pushed. Later: git push origin main v$v"; fi
+
+# Load a named fixture (tests/fixtures/<name>) into the dev data dir; `just seed` lists them
+seed fixture="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    dir=tests/fixtures/{{ fixture }}
+    if [[ -z "{{ fixture }}" || ! -d "$dir" ]]; then
+      [[ -n "{{ fixture }}" ]] && echo "no fixture '{{ fixture }}'"
+      echo "fixtures:"; for f in tests/fixtures/*/; do n=$(basename "$f"); echo "  $n  $(head -1 "$f/README" 2>/dev/null)"; done
+      exit 1
+    fi
+    mkdir -p "{{ dev_dir }}"
+    if [[ -f "$dir/config.toml" ]]; then
+      # {{{{FAKE}} is the fake model server `just dev mock` runs.
+      sed 's|{{{{FAKE}}|http://127.0.0.1:7880|g' "$dir/config.toml" > "{{ dev_dir }}/config.toml"
+      echo "wrote {{ dev_dir }}/config.toml"
+    fi
+    echo "seeded {{ fixture }}: $(head -1 "$dir/README" 2>/dev/null)"
 
 # Read-only views of the dev data (db; bank, progress, attempts in later phases)
 inspect what:

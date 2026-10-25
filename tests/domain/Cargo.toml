@@ -18,6 +18,7 @@ harness = false
 cucumber = "0.23.0"
 kizn-app = { path = "../../crates/kizn-app" }
 kizn-core = { path = "../../crates/kizn-core" }
+kizn-model = { path = "../../crates/kizn-model", features = ["fake"] }
 tempfile = "3.27.0"
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "sync"] }
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }

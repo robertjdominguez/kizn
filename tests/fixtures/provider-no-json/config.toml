@@ -1,0 +1,5 @@
+# Seeded by `just seed provider-no-json`. {{FAKE}} is the fake model server.
+[providers.chatty]
+protocol = "openai"
+base_url = "{{FAKE}}/no-json/v1"
+model = "chatty-7b"

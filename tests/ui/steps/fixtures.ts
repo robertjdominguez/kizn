@@ -3,7 +3,14 @@ import { resolve } from "node:path";
 import { test as base, createBdd } from "playwright-bdd";
 
 /** What a scenario remembers between steps. */
-export type World = { dataDir?: string };
+export type World = {
+  dataDir?: string;
+  /** The provider the scenario is working with. */
+  provider?: string;
+  model?: string;
+  /** A port nothing listens on, for "nothing answered". */
+  closedPort?: number;
+};
 
 export const test = base.extend<{ world: World }>({
   // biome-ignore lint/correctness/noEmptyPattern: Playwright's fixture signature

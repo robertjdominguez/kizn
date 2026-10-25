@@ -17,7 +17,7 @@ export default defineConfig({
     port,
     strictPort: true,
     allowedHosts: [".ts.net"],
-    proxy: { "/rpc": bridge },
+    proxy: { "/rpc": bridge, "/events": bridge },
   },
   build: {
     outDir: "dist",

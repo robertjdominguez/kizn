@@ -17,3 +17,4 @@ tauri-build = { version = "2", features = [] }
 kizn-app = { path = "../crates/kizn-app" }
 kizn-core = { path = "../crates/kizn-core" }
 tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
