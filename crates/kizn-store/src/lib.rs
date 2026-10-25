@@ -9,7 +9,8 @@ use rusqlite::Connection;
 
 /// In order. The schema version is the number applied, kept in
 /// `PRAGMA user_version`.
-const MIGRATIONS: &[&str] = &[include_str!("../migrations/0001_init.sql")];
+const MIGRATIONS: &[&str] =
+    &[include_str!("../migrations/0001_init.sql"), include_str!("../migrations/0002_provider_checks.sql")];
 
 pub const SCHEMA_VERSION: u32 = MIGRATIONS.len() as u32;
 
@@ -43,6 +44,13 @@ pub fn inspect(path: &Path) -> Result<Inspection> {
         tables.push((name, n));
     }
     Ok(Inspection { schema_version: user_version(&conn)?, tables })
+}
+
+pub struct CheckRow {
+    pub provider: String,
+    pub fingerprint: String,
+    pub tested_at: String,
+    pub check_json: String,
 }
 
 pub struct TopicRow {
@@ -79,6 +87,31 @@ impl Store {
         let mut stmt = conn.prepare("SELECT id, title FROM topics ORDER BY created_at, id")?;
         let rows = stmt.query_map([], |r| Ok(TopicRow { id: r.get(0)?, title: r.get(1)? }))?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+}
+
+impl Store {
+    pub fn save_check(&self, row: &CheckRow) -> Result<()> {
+        self.conn.lock().unwrap().execute(
+            "INSERT INTO provider_checks (provider, fingerprint, tested_at, check_json) VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT (provider) DO UPDATE SET fingerprint = ?2, tested_at = ?3, check_json = ?4",
+            (&row.provider, &row.fingerprint, &row.tested_at, &row.check_json),
+        )?;
+        Ok(())
+    }
+
+    pub fn checks(&self) -> Result<Vec<CheckRow>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT provider, fingerprint, tested_at, check_json FROM provider_checks")?;
+        let rows = stmt.query_map([], |r| {
+            Ok(CheckRow { provider: r.get(0)?, fingerprint: r.get(1)?, tested_at: r.get(2)?, check_json: r.get(3)? })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    pub fn delete_check(&self, provider: &str) -> Result<()> {
+        self.conn.lock().unwrap().execute("DELETE FROM provider_checks WHERE provider = ?1", [provider])?;
+        Ok(())
     }
 }
 
@@ -123,7 +156,24 @@ mod tests {
         drop(Store::open(&path).unwrap());
         let i = inspect(&path).unwrap();
         assert_eq!(i.schema_version, SCHEMA_VERSION);
-        assert_eq!(i.tables, vec![("topics".to_string(), 0)]);
+        assert_eq!(i.tables, vec![("provider_checks".to_string(), 0), ("topics".to_string(), 0)]);
+    }
+
+    #[test]
+    fn checks_upsert_by_provider() {
+        let store = Store::open_in_memory().unwrap();
+        let row = |fp: &str| CheckRow {
+            provider: "local".into(),
+            fingerprint: fp.into(),
+            tested_at: "2026-10-25 09:00:00".into(),
+            check_json: "{}".into(),
+        };
+        store.save_check(&row("a")).unwrap();
+        store.save_check(&row("b")).unwrap();
+        let checks = store.checks().unwrap();
+        assert_eq!((checks.len(), checks[0].fingerprint.as_str()), (1, "b"));
+        store.delete_check("local").unwrap();
+        assert!(store.checks().unwrap().is_empty());
     }
 
     #[test]
