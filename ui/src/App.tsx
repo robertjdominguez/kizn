@@ -1,6 +1,7 @@
 import { Info, Monitor, Moon, Sun } from "lucide-react";
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { About } from "./about/About";
+import { Settings } from "./settings/Settings";
 import { applyTheme, loadTheme, type ThemeChoice } from "./theme/theme";
 import { Today } from "./today/Today";
 
@@ -35,14 +36,35 @@ function ThemeToggle() {
   );
 }
 
+// Screens by URL hash (#/settings), so a reload or hot reload stays put.
+type View = "today" | "settings";
+const viewFromHash = (): View => (window.location.hash === "#/settings" ? "settings" : "today");
+
 export function App() {
+  const [view, setView] = useState<View>(viewFromHash);
+  useEffect(() => {
+    const onHash = () => setView(viewFromHash());
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
   const [about, setAbout] = useState(false);
   const closeAbout = useCallback(() => setAbout(false), []);
   return (
     <div className="flex h-full flex-col">
       <header className="flex h-11 shrink-0 items-center gap-2 border-b border-hairline px-4">
-        <span className="text-sm font-semibold tracking-tight text-ink">kizn</span>
-        <span className="text-sm text-ink-4">Today</span>
+        <span className="mr-2 text-sm font-semibold tracking-tight text-ink">kizn</span>
+        <nav aria-label="Main" className="flex items-center gap-1">
+          {(["today", "settings"] as const).map((v) => (
+            <a
+              key={v}
+              href={v === "today" ? "#/" : "#/settings"}
+              aria-current={view === v ? "page" : undefined}
+              className={`rounded-md px-2 py-1 text-sm capitalize transition-colors ${view === v ? "bg-raised/60 text-ink" : "text-ink-3 hover:text-ink"}`}
+            >
+              {v}
+            </a>
+          ))}
+        </nav>
         <span className="flex-1" />
         <ThemeToggle />
         <button
@@ -55,9 +77,7 @@ export function App() {
           <Info size={14} aria-hidden />
         </button>
       </header>
-      <main className="min-h-0 flex-1 overflow-auto">
-        <Today />
-      </main>
+      <main className="min-h-0 flex-1 overflow-auto">{view === "today" ? <Today /> : <Settings />}</main>
       <About open={about} onClose={closeAbout} />
     </div>
   );

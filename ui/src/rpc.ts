@@ -3,6 +3,7 @@ import type { AppError } from "./bindings/AppError";
 import type { AppInfo } from "./bindings/AppInfo";
 import type { Command } from "./bindings/Command";
 import type { Reply } from "./bindings/Reply";
+import type { SettingsView } from "./bindings/SettingsView";
 import type { TodayView } from "./bindings/TodayView";
 
 // The one way the UI talks to kizn-app: a Command in, its Reply out. In the
@@ -14,6 +15,12 @@ import type { TodayView } from "./bindings/TodayView";
 const REPLY = {
   get_today: "today",
   get_app_info: "app_info",
+  get_settings: "settings",
+  save_provider: "settings",
+  list_models: "models",
+  remove_provider: "settings",
+  test_provider: "settings",
+  assign_role: "settings",
 } as const satisfies Record<Command["type"], Reply["type"]>;
 
 type ReplyData<T extends Reply["type"]> = Extract<Reply, { type: T }>["data"];
@@ -51,4 +58,4 @@ export async function call<C extends Command>(cmd: C): Promise<ReplyFor<C>> {
   return reply.data as ReplyFor<C>;
 }
 
-export type { AppInfo, TodayView };
+export type { AppInfo, SettingsView, TodayView };

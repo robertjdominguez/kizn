@@ -37,7 +37,10 @@ export function Today() {
             <p className="font-medium text-ink">No model connected</p>
             <p className="text-ink-3">
               kizn writes practice items and tutors with a model you choose: a local one or a provider you have a key
-              for.
+              for.{" "}
+              <a href="#/settings" className="text-accent hover:underline">
+                Connect a model
+              </a>
             </p>
           </div>
         </motion.section>
