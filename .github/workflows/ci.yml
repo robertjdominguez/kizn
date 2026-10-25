@@ -82,16 +82,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: ubuntu-22.04
-            artifacts: |
-              target/release/bundle/appimage/*.AppImage
-              target/release/bundle/deb/*.deb
-              target/release/bundle/rpm/*.rpm
-          - os: macos-14
-            artifacts: target/release/bundle/dmg/*.dmg
-          - os: windows-2022
-            artifacts: target/release/bundle/msi/*.msi
+        os: [ubuntu-22.04, macos-14, windows-2022]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -104,5 +95,5 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: kizn-${{ matrix.os }}
-          path: ${{ matrix.artifacts }}
+          path: dist/*
           if-no-files-found: error

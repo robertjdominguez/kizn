@@ -177,9 +177,22 @@ types:
 build:
     bunx tauri build --no-bundle
 
-# Installers for this machine, unsigned (macOS is ad-hoc signed). Extra args go to `tauri build`
+# Installers for this machine, unsigned (macOS is ad-hoc signed). Extra args go to `tauri build`.
+# RPM and WiX (MSI) reject prerelease versions (0.1.0-rc.1), so prereleases skip .rpm and .msi.
 bundle *args:
-    bunx tauri build {{ args }}
+    #!/usr/bin/env bash
+    set -euo pipefail
+    version=$(sed -n 's/^  "version": "\(.*\)",$/\1/p' src-tauri/tauri.conf.json)
+    extra=()
+    if [[ "$version" == *-* ]]; then
+      case "$(uname -s)" in
+        Linux) extra=(--bundles appimage,deb) ;;
+        Darwin) ;;
+        *) extra=(--no-bundle) ;;
+      esac
+      echo "prerelease $version: ${extra[*]:-all bundles}"
+    fi
+    bunx tauri build {{ args }} ${extra[@]+"${extra[@]}"}
 
 # @install scenarios: the real install scripts against a staged release (stubs, or KIZN_STAGE_ASSETS=<dir> of real ones)
 install-test tag="":
@@ -195,7 +208,8 @@ release-assets out="dist":
       Linux)
         cp "$(first target/release/bundle/appimage/*.AppImage)" "$out/kizn-linux-x86_64.AppImage"
         cp src-tauri/icons/128x128.png "$out/kizn-icon.png"
-        cp target/release/bundle/deb/*.deb target/release/bundle/rpm/*.rpm "$out/"
+        cp target/release/bundle/deb/*.deb "$out/"
+        cp target/release/bundle/rpm/*.rpm "$out/" 2>/dev/null || echo "no .rpm (prereleases ship without one)"
         ;;
       Darwin)
         bundle=$(first target/universal-apple-darwin/release/bundle target/release/bundle)

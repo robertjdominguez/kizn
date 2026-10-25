@@ -38,11 +38,8 @@ jobs:
         run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
       - name: Bundle
         shell: bash
-        run: |
-          args="${{ matrix.args }}"
-          # WiX (MSI) rejects prerelease versions; prereleases ship without an .msi.
-          if [[ "$RUNNER_OS" == Windows && "$GITHUB_REF_NAME" == *-* ]]; then args="$args --no-bundle"; fi
-          just bundle $args
+        # `just bundle` skips .rpm and .msi for prereleases.
+        run: just bundle ${{ matrix.args }}
       - run: just release-assets dist
       - name: Install scenarios against these bundles
         shell: bash
