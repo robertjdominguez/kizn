@@ -1,6 +1,6 @@
-import { ChevronLeft, CircleAlert, CircleCheck, LoaderCircle, Target } from "lucide-react";
+import { ChevronDown, ChevronLeft, Circle, CircleAlert, CircleCheck, LoaderCircle, Target } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useId, useState } from "react";
 import type { OutcomeView } from "../bindings/OutcomeView";
 import type { SlotView } from "../bindings/SlotView";
 import { subscribe } from "../events";
@@ -128,6 +128,8 @@ function OutcomesCard({ topic }: { topic: TopicView }) {
 function OutcomeRow({ outcome: o, index }: { outcome: OutcomeView; index: number }) {
   const state = o.bank_state;
   const dim = state === "waiting";
+  const [open, setOpen] = useState(false);
+  const listId = useId();
   return (
     <motion.li
       layout
@@ -156,10 +158,58 @@ function OutcomeRow({ outcome: o, index }: { outcome: OutcomeView; index: number
         <span className="w-4 shrink-0 text-sm tabular-nums text-ink-4">{o.ord}</span>
         <div className="flex min-w-0 flex-1 flex-col gap-1.5">
           <p className="text-sm text-ink">{o.statement}</p>
-          <p className="text-xs text-ink-3">
-            Target: <span className="text-ink-2">{o.target_plain}</span>
-            {o.reason && <span className="text-ink-4"> · {o.reason}</span>}
-          </p>
+          <div className="flex items-start gap-3">
+            <p className="flex-1 text-xs text-ink-3">
+              Target: <span className="text-ink-2">{o.target_plain}</span>
+              {o.reason && <span className="text-ink-4"> · {o.reason}</span>}
+            </p>
+            <button
+              type="button"
+              aria-expanded={open}
+              aria-controls={listId}
+              onClick={() => setOpen((v) => !v)}
+              className="flex shrink-0 items-center gap-1 rounded px-1 text-xs text-ink-3 transition-colors hover:text-ink"
+            >
+              {plural(o.concepts.length, "concept")}
+              <motion.span
+                animate={{ rotate: open ? 180 : 0 }}
+                transition={{ duration: 0.18, ease: EASE }}
+                className="flex"
+              >
+                <ChevronDown size={13} aria-hidden />
+              </motion.span>
+            </button>
+          </div>
+          <AnimatePresence initial={false}>
+            {open && (
+              <motion.div
+                key="concepts"
+                id={listId}
+                initial={{ height: 0, opacity: 0 }}
+                animate={{
+                  height: "auto",
+                  opacity: 1,
+                  transition: { height: { duration: 0.22, ease: EASE }, opacity: { duration: 0.18, delay: 0.05 } },
+                }}
+                exit={{
+                  height: 0,
+                  opacity: 0,
+                  transition: { height: { duration: 0.18, ease: EASE }, opacity: { duration: 0.1 } },
+                }}
+                className="overflow-hidden"
+                aria-label={`Concepts for outcome ${o.ord}`}
+              >
+                <ul className="mt-1 flex flex-col gap-1.5 border-l border-hairline-strong py-1 pl-3">
+                  {o.concepts.map((c) => (
+                    <li key={c.id} className="flex items-start gap-2 text-xs">
+                      <Circle size={10} className="mt-[3px] shrink-0 text-ink-4" aria-hidden />
+                      <span className="flex-1 text-ink-2">{c.statement}</span>
+                    </li>
+                  ))}
+                </ul>
+              </motion.div>
+            )}
+          </AnimatePresence>
           <div className="mt-1 flex items-center gap-4">
             <AnimatePresence initial={false}>
               {state !== "waiting" && (
