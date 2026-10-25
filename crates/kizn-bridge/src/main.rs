@@ -15,6 +15,7 @@
 //! Dev subcommands, for the justfile:
 //!   kizn-bridge paths        the data and config directories, as resolved
 //!   kizn-bridge inspect db   read-only: schema version, tables, row counts
+//!   kizn-bridge seed <file>  migrate the dev database, then run a fixture's SQL
 
 use std::convert::Infallible;
 use std::net::{Ipv4Addr, SocketAddr};
@@ -114,6 +115,14 @@ async fn main() {
     match args.first().map(String::as_str) {
         None | Some("serve") => serve().await,
         Some("paths") => paths(),
+        Some("seed") => {
+            let Some(file) = args.get(1) else { exit("seed needs a SQL file".into()) };
+            let sql = std::fs::read_to_string(file).unwrap_or_else(|e| exit(format!("can't read {file}: {e}")));
+            let path = Paths::from_env().data_dir;
+            std::fs::create_dir_all(&path).unwrap_or_else(|e| exit(format!("can't create {}: {e}", path.display())));
+            let store = kizn_store::Store::open(&path.join(kizn_app::DB_FILE)).unwrap_or_else(|e| exit(e.to_string()));
+            store.execute_batch(&sql).unwrap_or_else(|e| exit(format!("{file}: {e}")));
+        }
         Some("inspect") => {
             if let Err(e) = inspect(args.get(1).map(String::as_str)) {
                 eprintln!("kizn-bridge: {e}");

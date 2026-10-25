@@ -80,6 +80,14 @@ impl Store {
         Ok(Store { conn: Mutex::new(conn) })
     }
 
+    /// Runs SQL as given: dev fixtures (`just seed`), never app code.
+    pub fn execute_batch(&self, sql: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.pragma_update(None, "foreign_keys", "ON")?;
+        conn.execute_batch(sql)?;
+        Ok(())
+    }
+
     pub fn schema_version(&self) -> Result<u32> {
         user_version(&self.conn.lock().unwrap())
     }

@@ -1,0 +1,2 @@
+Outcome 1 ready, 2 being written, 3 and 4 waiting their turn.
+Use with `just dev mock paused`, so the bank writer leaves it as seeded.

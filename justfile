@@ -77,16 +77,17 @@ doctor:
       printf "  %-16s %s\n" "operator" "${op:-not set: sudo tailscale set --operator=\$USER (for just dev tailnet)}"
     fi
 
-# Browser loop: bridge + Vite on localhost. `mock`: models are the fake model server. `tailnet`: serve on this host's Tailscale name
+# Browser loop: bridge + Vite. `mock`: the fake model server. `paused`: hold bank writing. `tailnet`: serve on Tailscale
 dev *args:
     #!/usr/bin/env bash
     set -euo pipefail
-    mock=0; tailnet=0
+    mock=0; tailnet=0; paused=0
     for a in {{ args }}; do
       case "$a" in
         mock) mock=1 ;;
         tailnet) tailnet=1 ;;
-        *) echo "just dev: unknown option '$a' (mock, tailnet)"; exit 2 ;;
+        paused) paused=1 ;;
+        *) echo "just dev: unknown option '$a' (mock, tailnet, paused)"; exit 2 ;;
       esac
     done
     cargo build -q -p kizn-bridge
@@ -100,7 +101,8 @@ dev *args:
     }
     trap cleanup EXIT INT TERM
     # mock: model traffic goes to the fake model server (127.0.0.1:7880), keys stay in memory.
-    KIZN_MOCK=$mock KIZN_DATA_DIR="{{ dev_dir }}" KIZN_CONFIG_DIR="{{ dev_dir }}" "{{ bridge }}" &
+    # paused: the bank writer holds still, so seeded states stay as seeded.
+    KIZN_BANK_PAUSED=$paused KIZN_MOCK=$mock KIZN_DATA_DIR="{{ dev_dir }}" KIZN_CONFIG_DIR="{{ dev_dir }}" "{{ bridge }}" &
     pids+=($!)
     if [[ $tailnet == 1 ]]; then
       # Tailnet only. Never `tailscale funnel`, which is public.
@@ -272,6 +274,11 @@ seed fixture="":
       # {{{{FAKE}} is the fake model server `just dev mock` runs.
       sed 's|{{{{FAKE}}|http://127.0.0.1:7880|g' "$dir/config.toml" > "{{ dev_dir }}/config.toml"
       echo "wrote {{ dev_dir }}/config.toml"
+    fi
+    if [[ -f "$dir/seed.sql" ]]; then
+      cargo build -q -p kizn-bridge
+      KIZN_DATA_DIR="{{ dev_dir }}" KIZN_CONFIG_DIR="{{ dev_dir }}" "{{ bridge }}" seed "$dir/seed.sql"
+      echo "loaded $dir/seed.sql (reload the page)"
     fi
     echo "seeded {{ fixture }}: $(head -1 "$dir/README" 2>/dev/null)"
 

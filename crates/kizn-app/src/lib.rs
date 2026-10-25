@@ -148,8 +148,13 @@ impl App {
 }
 
 impl App {
-    /// Starts the bank writer if it isn't running yet.
+    /// Starts the bank writer if it isn't running yet. `KIZN_BANK_PAUSED=1`
+    /// (`just dev mock paused`) holds it, so seeded states stay as seeded
+    /// while the UI is reviewed.
     fn ensure_bank(&self) {
+        if std::env::var("KIZN_BANK_PAUSED").is_ok_and(|v| v == "1") {
+            return;
+        }
         if !self.bank_started.swap(true, std::sync::atomic::Ordering::SeqCst) {
             tokio::spawn(self.ctx.clone().bank_loop(self.bank_wake.clone()));
         }

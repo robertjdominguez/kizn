@@ -1,0 +1,24 @@
+-- Seeded by `just seed topic-preparing`: Just confirmed: nothing ready yet, outcome 1 being written.
+DELETE FROM topics;
+INSERT INTO topics (id, title, goal_md, created_at, status, draft_state, confirmed_at) VALUES ('01SEEDTOPIC00000000000000T', 'Container fundamentals', 'explain to customers why deployments behave differently', '2026-10-25 09:00:00', 'confirmed', 'drafted', '2026-10-25 09:10:00');
+INSERT INTO outcomes (id, topic_id, ord, statement, target_tier, tier_reason, concepts_state, bank_state, bank_error, retry_at) VALUES ('01SEEDOUTCOME0000000000001', '01SEEDTOPIC00000000000000T', 1, 'Explain the difference between an image, a container and a registry, and what each is to a deployment', 'understand', 'you said "explain to customers"', 'done', 'writing', NULL, NULL);
+INSERT INTO concepts (id, outcome_id, ord, statement) VALUES ('01SEEDCONCEPT00000000101', '01SEEDOUTCOME0000000000001', 1, 'An image is immutable layers plus config');
+INSERT INTO concepts (id, outcome_id, ord, statement) VALUES ('01SEEDCONCEPT00000000102', '01SEEDOUTCOME0000000000001', 2, 'A container is an image plus a writable layer');
+INSERT INTO concepts (id, outcome_id, ord, statement) VALUES ('01SEEDCONCEPT00000000103', '01SEEDOUTCOME0000000000001', 3, 'A registry stores images by repository and tag');
+INSERT INTO concepts (id, outcome_id, ord, statement) VALUES ('01SEEDCONCEPT00000000104', '01SEEDOUTCOME0000000000001', 4, 'A tag is a movable name; a digest is fixed');
+INSERT INTO concepts (id, outcome_id, ord, statement) VALUES ('01SEEDCONCEPT00000000105', '01SEEDOUTCOME0000000000001', 5, 'A deployment pulls by reference when it starts');
+INSERT INTO outcomes (id, topic_id, ord, statement, target_tier, tier_reason, concepts_state, bank_state, bank_error, retry_at) VALUES ('01SEEDOUTCOME0000000000002', '01SEEDTOPIC00000000000000T', 2, 'Diagnose why a service changed behaviour with the same tag', 'analyze', 'you said "why deployments behave differently"', 'done', 'waiting', NULL, NULL);
+INSERT INTO concepts (id, outcome_id, ord, statement) VALUES ('01SEEDCONCEPT00000000201', '01SEEDOUTCOME0000000000002', 1, 'Re-pushing a tag points it at new content');
+INSERT INTO concepts (id, outcome_id, ord, statement) VALUES ('01SEEDCONCEPT00000000202', '01SEEDOUTCOME0000000000002', 2, 'Hosts cache images by digest');
+INSERT INTO concepts (id, outcome_id, ord, statement) VALUES ('01SEEDCONCEPT00000000203', '01SEEDOUTCOME0000000000002', 3, 'Pull policies decide when a host re-pulls');
+INSERT INTO concepts (id, outcome_id, ord, statement) VALUES ('01SEEDCONCEPT00000000204', '01SEEDOUTCOME0000000000002', 4, 'Rolling restarts pick up whatever the tag points at now');
+INSERT INTO outcomes (id, topic_id, ord, statement, target_tier, tier_reason, concepts_state, bank_state, bank_error, retry_at) VALUES ('01SEEDOUTCOME0000000000003', '01SEEDTOPIC00000000000000T', 3, 'Advise a customer on pinning images by digest', 'evaluate', 'you said "explain to customers"', 'done', 'waiting', NULL, NULL);
+INSERT INTO concepts (id, outcome_id, ord, statement) VALUES ('01SEEDCONCEPT00000000301', '01SEEDOUTCOME0000000000003', 1, 'A digest pins exact content');
+INSERT INTO concepts (id, outcome_id, ord, statement) VALUES ('01SEEDCONCEPT00000000302', '01SEEDOUTCOME0000000000003', 2, 'Pinning trades freshness for reproducibility');
+INSERT INTO concepts (id, outcome_id, ord, statement) VALUES ('01SEEDCONCEPT00000000303', '01SEEDOUTCOME0000000000003', 3, 'Automation can bump pinned digests');
+INSERT INTO concepts (id, outcome_id, ord, statement) VALUES ('01SEEDCONCEPT00000000304', '01SEEDOUTCOME0000000000003', 4, 'Base-image updates need a deliberate rebuild');
+INSERT INTO concepts (id, outcome_id, ord, statement) VALUES ('01SEEDCONCEPT00000000305', '01SEEDOUTCOME0000000000003', 5, 'Signed images prove who built them');
+INSERT INTO outcomes (id, topic_id, ord, statement, target_tier, tier_reason, concepts_state, bank_state, bank_error, retry_at) VALUES ('01SEEDOUTCOME0000000000004', '01SEEDTOPIC00000000000000T', 4, 'Compare how two clusters resolve the same image reference', 'analyze', 'you said "why deployments behave differently"', 'done', 'waiting', NULL, NULL);
+INSERT INTO concepts (id, outcome_id, ord, statement) VALUES ('01SEEDCONCEPT00000000401', '01SEEDOUTCOME0000000000004', 1, 'Registries can be mirrored per region');
+INSERT INTO concepts (id, outcome_id, ord, statement) VALUES ('01SEEDCONCEPT00000000402', '01SEEDOUTCOME0000000000004', 2, 'Mirrors can lag behind the source');
+INSERT INTO concepts (id, outcome_id, ord, statement) VALUES ('01SEEDCONCEPT00000000403', '01SEEDOUTCOME0000000000004', 3, 'Credentials can change what a host can pull');

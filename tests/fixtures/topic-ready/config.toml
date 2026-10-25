@@ -1,0 +1,10 @@
+# Seeded by `just seed topic-ready`. {{FAKE}} is the fake model server.
+[providers.local]
+protocol = "openai"
+base_url = "{{FAKE}}/works/v1"
+model = "qwen3:32b"
+
+[roles]
+author = "local"
+checker = "local"
+tutor = "local"
