@@ -1,7 +1,40 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "The main window: core only. No shell, no filesystem; kizn-app does IO behind the rpc command.",
-  "windows": ["main"],
-  "permissions": ["core:default"]
+  "description": "The main window: core, plus opening the provider sites Settings links to. No shell, no filesystem; kizn-app does IO behind the rpc command.",
+  "windows": [
+    "main"
+  ],
+  "permissions": [
+    "core:default",
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [
+        {
+          "url": "https://platform.openai.com/*"
+        },
+        {
+          "url": "https://console.anthropic.com/*"
+        },
+        {
+          "url": "https://aistudio.google.com/*"
+        },
+        {
+          "url": "https://openrouter.ai/*"
+        },
+        {
+          "url": "https://ollama.com/*"
+        },
+        {
+          "url": "https://lmstudio.ai/*"
+        },
+        {
+          "url": "https://kizn.app/*"
+        },
+        {
+          "url": "https://github.com/robertjdominguez/kizn/*"
+        }
+      ]
+    }
+  ]
 }

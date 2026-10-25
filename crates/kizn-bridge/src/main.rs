@@ -1,41 +1,56 @@
 //! Dev only, never bundled: the real `kizn-app` behind HTTP, so the UI can
 //! run in a browser (and over SSH). Binds 127.0.0.1 only; Vite proxies
-//! `/rpc` to it.
+//! `/rpc` and `/events` to it.
 //!
 //!   POST /rpc          a Command as JSON → its Reply, or an AppError with a 4xx/5xx
+//!   GET  /events       server-sent Events (config changes, later job progress)
 //!   POST /test/fresh   (`test` feature only) switch to a new, empty data
 //!                      directory: "Given a fresh data directory" in @ui steps
 //!
-//! Env: KIZN_DATA_DIR / KIZN_CONFIG_DIR (where), KIZN_BRIDGE_PORT (default 7878).
+//! Env: KIZN_DATA_DIR / KIZN_CONFIG_DIR (where), KIZN_BRIDGE_PORT (default
+//! 7878), KIZN_MOCK=1 (`just dev mock`: model traffic goes to the fake model
+//! server on KIZN_FAKE_PORT, default 7880, and keys stay in memory).
+//! The `test` feature always runs mock mode.
 //!
 //! Dev subcommands, for the justfile:
 //!   kizn-bridge paths        the data and config directories, as resolved
 //!   kizn-bridge inspect db   read-only: schema version, tables, row counts
 
+use std::convert::Infallible;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::{Arc, RwLock};
 
 use axum::extract::State;
 use axum::http::StatusCode;
+use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
-use axum::routing::post;
+use axum::routing::{get, post};
 use axum::{Json, Router};
-use kizn_app::{App, AppError, Command, Paths};
-use kizn_core::{SeededRng, SystemClock};
+use futures_util::{Stream, StreamExt};
+use kizn_app::{App, AppDeps, AppError, Command, MemorySecrets, Paths};
+use kizn_model::fake::FakeServer;
+use tokio_stream::wrappers::BroadcastStream;
 
-type Shared = Arc<RwLock<Arc<App>>>;
-
-fn open(paths: Paths) -> Result<App, AppError> {
-    App::open(paths, Arc::new(SystemClock), Arc::new(SeededRng::from_os()))
+#[derive(Clone)]
+struct Bridge {
+    app: Arc<RwLock<Arc<App>>>,
+    /// For `/test/fresh`, which opens a new App with the same deps.
+    #[cfg_attr(not(feature = "test"), allow(dead_code))]
+    deps: AppDeps,
 }
 
-async fn rpc(State(app): State<Shared>, Json(cmd): Json<Command>) -> Response {
-    let app = app.read().unwrap().clone();
-    match app.handle(cmd).await {
+impl Bridge {
+    fn app(&self) -> Arc<App> {
+        self.app.read().unwrap().clone()
+    }
+}
+
+async fn rpc(State(bridge): State<Bridge>, Json(cmd): Json<Command>) -> Response {
+    match bridge.app().handle(cmd).await {
         Ok(reply) => Json(reply).into_response(),
         Err(e) => {
             let status = match e {
-                AppError::Config(_) => StatusCode::UNPROCESSABLE_ENTITY,
+                AppError::Config(_) | AppError::Refused(_) => StatusCode::UNPROCESSABLE_ENTITY,
                 AppError::Store(_) | AppError::Io(_) => StatusCode::INTERNAL_SERVER_ERROR,
             };
             (status, Json(e)).into_response()
@@ -43,15 +58,25 @@ async fn rpc(State(app): State<Shared>, Json(cmd): Json<Command>) -> Response {
     }
 }
 
+async fn events(State(bridge): State<Bridge>) -> Sse<impl Stream<Item = Result<SseEvent, Infallible>>> {
+    let stream = BroadcastStream::new(bridge.app().subscribe()).filter_map(|ev| async move {
+        let ev = ev.ok()?;
+        Some(Ok(SseEvent::default().data(serde_json::to_string(&ev).ok()?)))
+    });
+    Sse::new(stream).keep_alive(KeepAlive::default())
+}
+
 #[cfg(feature = "test")]
-async fn fresh(State(app): State<Shared>) -> Response {
+async fn fresh(State(bridge): State<Bridge>) -> Response {
     // A new directory beside the current one, so a run's data stays in the
-    // tempdir the test harness gave the bridge.
-    let base = app.read().unwrap().paths().data_dir.clone();
-    let dir = base.with_file_name(format!("fresh-{}", kizn_core::new_id(&SystemClock, &SeededRng::from_os())));
-    match open(Paths::in_dir(&dir)) {
+    // tempdir the test harness gave the bridge. Keys start empty too.
+    let base = bridge.app().paths().data_dir.clone();
+    let id = kizn_core::new_id(&kizn_core::SystemClock, &kizn_core::SeededRng::from_os());
+    let dir = base.with_file_name(format!("fresh-{id}"));
+    let deps = AppDeps { secrets: Arc::new(MemorySecrets::default()), ..bridge.deps.clone() };
+    match App::open(Paths::in_dir(&dir), deps) {
         Ok(next) => {
-            *app.write().unwrap() = Arc::new(next);
+            *bridge.app.write().unwrap() = Arc::new(next);
             Json(serde_json::json!({ "data_dir": dir.display().to_string() })).into_response()
         }
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(e)).into_response(),
@@ -102,32 +127,44 @@ async fn main() {
     }
 }
 
+fn exit(msg: String) -> ! {
+    eprintln!("kizn-bridge: {msg}");
+    std::process::exit(1);
+}
+
 async fn serve() {
-    let app = match open(Paths::from_env()) {
-        Ok(app) => Arc::new(app),
-        Err(e) => {
-            eprintln!("kizn-bridge: {e}");
-            std::process::exit(1);
-        }
-    };
+    let mock = cfg!(feature = "test") || std::env::var("KIZN_MOCK").is_ok_and(|v| v == "1");
+    let mut deps = AppDeps::system();
+    if mock {
+        let port = if cfg!(feature = "test") {
+            0
+        } else {
+            std::env::var("KIZN_FAKE_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(7880)
+        };
+        let fake = FakeServer::start(port).await.unwrap_or_else(|e| exit(format!("can't start the fake model server: {e}")));
+        deps.http = fake.client();
+        deps.secrets = Arc::new(MemorySecrets::default());
+        eprintln!(
+            "kizn-bridge: mock mode. Model traffic goes to the fake model server on http://{} (keys stay in memory).\n  \
+             Any host works, e.g. http://gpu:11434/v1. Behaviours by URL: {}",
+            fake.addr(),
+            kizn_model::fake::Behaviour::ALL.map(|b| fake.openai_url(b)).join("  ")
+        );
+    }
+    let app = App::open(Paths::from_env(), deps.clone()).unwrap_or_else(|e| exit(e.to_string()));
     let port = std::env::var("KIZN_BRIDGE_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(7878);
     let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
-    let listener = match tokio::net::TcpListener::bind(addr).await {
-        Ok(l) => l,
-        Err(e) => {
-            eprintln!("kizn-bridge: can't listen on {addr}: {e}");
-            std::process::exit(1);
-        }
-    };
+    let listener =
+        tokio::net::TcpListener::bind(addr).await.unwrap_or_else(|e| exit(format!("can't listen on {addr}: {e}")));
     eprintln!(
         "kizn-bridge on http://{addr} (data: {}, config: {}){}",
         app.paths().data_dir.display(),
         app.paths().config_dir.display(),
         if cfg!(feature = "test") { " [test]" } else { "" }
     );
-    let router = Router::new().route("/rpc", post(rpc));
+    let router = Router::new().route("/rpc", post(rpc)).route("/events", get(events));
     #[cfg(feature = "test")]
     let router = router.route("/test/fresh", post(fresh));
-    let router = router.with_state(Arc::new(RwLock::new(app)));
+    let router = router.with_state(Bridge { app: Arc::new(RwLock::new(Arc::new(app))), deps });
     axum::serve(listener, router).await.unwrap();
 }
