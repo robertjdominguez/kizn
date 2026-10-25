@@ -1,9 +1,10 @@
 import { expect } from "@playwright/test";
 import { bridge, Given, Then, When } from "./fixtures";
 
-Given("a fresh data directory", async ({ request }) => {
+Given("a fresh data directory", async ({ request, world }) => {
   const res = await request.post(`${bridge()}/test/fresh`);
   expect(res.ok(), "the bridge needs its `test` feature").toBeTruthy();
+  world.dataDir = (await res.json()).data_dir;
 });
 
 When("I open kizn", async ({ page }) => {

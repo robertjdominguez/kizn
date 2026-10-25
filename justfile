@@ -125,8 +125,9 @@ app:
 
 # Unit tests, then both BDD layers
 test:
-    cargo test --workspace --exclude kizn-bdd
+    cargo test --workspace --exclude kizn-bdd --exclude kizn-install-tests
     just bdd
+    just install-test
 
 # BDD: @domain (cucumber-rs) then @ui (Playwright). Optional tag narrows both
 bdd tag="":
@@ -176,9 +177,71 @@ types:
 build:
     bunx tauri build --no-bundle
 
-# Installers for this machine (unsigned until phase 1)
-bundle:
-    bunx tauri build
+# Installers for this machine, unsigned (macOS is ad-hoc signed). Extra args go to `tauri build`
+bundle *args:
+    bunx tauri build {{ args }}
+
+# @install scenarios: the real install scripts against a staged release (stubs, or KIZN_STAGE_ASSETS=<dir> of real ones)
+install-test tag="":
+    KIZN_BDD_TAG="{{ tag }}" cargo test -p kizn-install-tests --test install
+
+# Copy this machine's bundles into <out> under the release's stable names
+release-assets out="dist":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    out="{{ out }}"; mkdir -p "$out"
+    first() { for f in "$@"; do [[ -e "$f" ]] && { echo "$f"; return; }; done; return 1; }
+    case "$(uname -s)" in
+      Linux)
+        cp "$(first target/release/bundle/appimage/*.AppImage)" "$out/kizn-linux-x86_64.AppImage"
+        cp src-tauri/icons/128x128.png "$out/kizn-icon.png"
+        cp target/release/bundle/deb/*.deb target/release/bundle/rpm/*.rpm "$out/"
+        ;;
+      Darwin)
+        bundle=$(first target/universal-apple-darwin/release/bundle target/release/bundle)
+        tar -czf "$out/kizn-macos-universal.app.tar.gz" -C "$bundle/macos" kizn.app
+        cp "$bundle"/dmg/*.dmg "$out/"
+        ;;
+      *)
+        exe=$(first target/release/kizn.exe)
+        powershell -NoProfile -Command "Compress-Archive -Force -Path '$exe' -DestinationPath '$out/kizn-windows-x86_64.zip'"
+        cp target/release/bundle/msi/*.msi "$out/" 2>/dev/null || echo "no .msi (prereleases ship without one)"
+        ;;
+    esac
+    ls -l "$out"
+
+# Write VERSION and SHA256SUMS for a release directory (after every OS's assets are in it)
+release-sums dir="dist":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd "{{ dir }}"
+    sed -n 's/^ *"version": *"\(.*\)",$/\1/p' "{{ justfile_directory() }}/src-tauri/tauri.conf.json" | head -1 > VERSION
+    rm -f SHA256SUMS
+    if command -v sha256sum >/dev/null; then sha256sum -- * > SHA256SUMS; else shasum -a 256 -- * > SHA256SUMS; fi
+    cat VERSION SHA256SUMS
+
+# Stage a fake release under <dir> and serve it, to try the install scripts by hand
+stage-release dir version="0.1.0":
+    cargo run -q -p kizn-install-tests --bin kizn-stage -- "{{ dir }}" "{{ version }}"
+
+# Cut a release: set the version, commit, tag v<version>, and (after asking) push; CI drafts the GitHub release
+release version:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    v="{{ version }}"; v="${v#v}"
+    [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]] || { echo "not a version: $v (want X.Y.Z or X.Y.Z-rc.N)"; exit 2; }
+    [[ "$(git branch --show-current)" == main ]] || { echo "release from main"; exit 1; }
+    [[ -z "$(git status --porcelain)" ]] || { echo "the working tree isn't clean"; exit 1; }
+    git rev-parse -q --verify "refs/tags/v$v" >/dev/null && { echo "v$v is already tagged"; exit 1; }
+    sed -i.bak -E '/^\[workspace\.package\]/,/^\[/ s/^version = ".*"/version = "'"$v"'"/' Cargo.toml && rm Cargo.toml.bak
+    sed -i.bak -E 's/^  "version": ".*",$/  "version": "'"$v"'",/' src-tauri/tauri.conf.json && rm src-tauri/tauri.conf.json.bak
+    cargo update -q --workspace
+    git add Cargo.toml Cargo.lock src-tauri/tauri.conf.json
+    git commit -q -s -m "Release v$v"
+    git tag -a "v$v" -m "kizn v$v"
+    echo "Committed and tagged v$v."
+    read -r -p "Push main and v$v to origin (CI builds and drafts the release)? [y/N] " a
+    if [[ "$a" == y || "$a" == Y ]]; then git push origin main "v$v"; else echo "Not pushed. Later: git push origin main v$v"; fi
 
 # Read-only views of the dev data (db; bank, progress, attempts in later phases)
 inspect what:

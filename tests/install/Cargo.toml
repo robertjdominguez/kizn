@@ -1,0 +1,28 @@
+[package]
+name = "kizn-install-tests"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+flate2 = "1"
+sha2 = "0.10"
+tar = "0.4"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+
+[dev-dependencies]
+axum = "0.8.9"
+cucumber = "0.23.0"
+tempfile = "3.27.0"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net"] }
+tower-http = { version = "0.6", features = ["fs"] }
+
+[[test]]
+name = "install"
+harness = false

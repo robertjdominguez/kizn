@@ -9,18 +9,34 @@ use std::sync::Arc;
 
 use chrono::{TimeZone, Utc};
 use cucumber::{World, given, then, when};
-use kizn_app::{App, CONFIG_FILE, Command, Paths, Reply, TodayView};
+use kizn_app::{App, AppInfo, CONFIG_FILE, Command, Paths, Reply, TodayView};
 use kizn_core::{FakeClock, SeededRng};
 
-#[derive(Debug, Default, World)]
+#[derive(Default, World)]
 struct Kizn {
     dir: Option<tempfile::TempDir>,
+    app: Option<App>,
     today: Option<TodayView>,
+    about: Option<AppInfo>,
+}
+
+impl std::fmt::Debug for Kizn {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Kizn").field("dir", &self.dir).field("today", &self.today).field("about", &self.about).finish()
+    }
 }
 
 impl Kizn {
     fn dir(&self) -> &std::path::Path {
         self.dir.as_ref().expect("no data directory: start with \"Given a fresh data directory\"").path()
+    }
+
+    fn app(&self) -> &App {
+        self.app.as_ref().expect("kizn isn't open: \"When I open kizn\" first")
+    }
+
+    fn about(&self) -> &AppInfo {
+        self.about.as_ref().expect("About isn't open: \"And I open About\" first")
     }
 
     fn today(&self) -> &TodayView {
@@ -41,6 +57,26 @@ async fn open_kizn(w: &mut Kizn) {
         Reply::Today(t) => w.today = Some(t),
         other => panic!("GetToday replied {other:?}"),
     }
+    w.app = Some(app);
+}
+
+#[when("I open About")]
+async fn open_about(w: &mut Kizn) {
+    match w.app().handle(Command::GetAppInfo).await.unwrap() {
+        Reply::AppInfo(i) => w.about = Some(i),
+        other => panic!("GetAppInfo replied {other:?}"),
+    }
+}
+
+#[then("I see the version of kizn I'm running")]
+fn see_version(w: &mut Kizn) {
+    // kizn-bdd shares the workspace version with kizn-app.
+    assert_eq!(w.about().version, env!("CARGO_PKG_VERSION"));
+}
+
+#[then("I see where my data is kept")]
+fn see_data_dir(w: &mut Kizn) {
+    assert_eq!(std::path::Path::new(&w.about().data_dir), w.dir());
 }
 
 // The UI owns the words; here each phrase a scenario can "see" maps to the

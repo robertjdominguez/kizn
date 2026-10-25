@@ -40,13 +40,37 @@
       main { width: 100%; max-width: 560px; display: flex; flex-direction: column; gap: 20px; }
       h1 { margin: 0; color: var(--ink); font-size: 28px; letter-spacing: -0.02em; }
       p { margin: 0; }
-      .install {
+      .install { display: flex; flex-direction: column; gap: 10px; }
+      .os { font-size: 13px; color: var(--ink-3); margin-bottom: 4px; }
+      .line {
+        display: flex;
+        align-items: center;
+        gap: 8px;
         border: 1px solid var(--hairline);
         background: var(--subtle);
         border-radius: 8px;
-        padding: 14px 16px;
-        font-size: 14px;
+        padding: 10px 12px;
       }
+      code { color: var(--ink); font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+      .line code {
+        flex: 1;
+        min-width: 0;
+        overflow-x: auto;
+        white-space: nowrap;
+      }
+      button {
+        flex: none;
+        border: 1px solid var(--hairline);
+        background: transparent;
+        color: var(--ink-3);
+        border-radius: 6px;
+        padding: 3px 8px;
+        font: inherit;
+        font-size: 12px;
+        cursor: pointer;
+      }
+      button:hover { color: var(--ink); }
+      .note { font-size: 13px; }
       a { color: var(--teal); }
     </style>
   </head>
@@ -57,9 +81,38 @@
         A desktop app for learning something properly. A model you choose writes practice ahead of time; code grades
         it, schedules it, and tells you plainly what's left before you're ready.
       </p>
-      <!-- Served by GitHub Pages from main:/docs. Phase 1 replaces this with the install lines (install.sh, install.ps1). -->
-      <div class="install">Not released yet. A one-line install for macOS, Linux and Windows comes with v0.1.0.</div>
+      <!-- Served by GitHub Pages from main:/docs, with install.sh and install.ps1 beside it. -->
+      <section class="install" aria-label="Install">
+        <div>
+          <div class="os">macOS and Linux</div>
+          <div class="line"><code>curl -fsSL https://kizn.app/install.sh | sh</code><button type="button">Copy</button></div>
+        </div>
+        <div>
+          <div class="os">Windows (PowerShell)</div>
+          <div class="line"><code>irm https://kizn.app/install.ps1 | iex</code><button type="button">Copy</button></div>
+        </div>
+        <p class="note">
+          Installs for your user only, after checking the download's SHA-256. Remove it with
+          <code>--uninstall</code> (<code>-Uninstall</code> on Windows); your data stays unless you add
+          <code>--purge</code>. You'll need a model to learn with: a local one or a key for a provider.
+        </p>
+        <p class="note">The first release (v0.1.0) isn't out yet, so these lines won't work until it is.</p>
+      </section>
       <p><a href="https://github.com/robertjdominguez/kizn">Source on GitHub</a> · AGPL-3.0</p>
     </main>
+    <script>
+      for (const button of document.querySelectorAll(".line button")) {
+        button.addEventListener("click", async () => {
+          const text = button.previousElementSibling.textContent;
+          try {
+            await navigator.clipboard.writeText(text);
+            button.textContent = "Copied";
+          } catch {
+            button.textContent = "Select it";
+          }
+          setTimeout(() => (button.textContent = "Copy"), 1500);
+        });
+      }
+    </script>
   </body>
 </html>

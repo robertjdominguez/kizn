@@ -32,3 +32,6 @@ playwright-report/
 .env
 .env.*
 !.env.example
+
+# Release assets (just release-assets)
+/dist/

@@ -87,6 +87,7 @@ jobs:
             artifacts: |
               target/release/bundle/appimage/*.AppImage
               target/release/bundle/deb/*.deb
+              target/release/bundle/rpm/*.rpm
           - os: macos-14
             artifacts: target/release/bundle/dmg/*.dmg
           - os: windows-2022
@@ -96,6 +97,10 @@ jobs:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup
       - run: just bundle
+      - run: just release-assets dist
+      - name: Install scenarios against these bundles
+        shell: bash
+        run: KIZN_STAGE_ASSETS="$(pwd -W 2>/dev/null || pwd)/dist" just install-test
       - uses: actions/upload-artifact@v4
         with:
           name: kizn-${{ matrix.os }}
