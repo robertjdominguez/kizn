@@ -29,7 +29,9 @@ export function Settings() {
   // editing a provider. On first run (no providers) it's all there is.
   // `first`: opened because there were no providers. It stays open until
   // it's finished, even though saving the provider means there now is one.
-  const [wizard, setWizard] = useState<{ provider: ProviderView | null; first?: boolean } | null>(null);
+  const [wizard, setWizard] = useState<{ provider: ProviderView | null; first?: boolean; started?: boolean } | null>(
+    null,
+  );
 
   const run = useCallback(async (p: Promise<SettingsView>) => {
     try {
@@ -58,6 +60,9 @@ export function Settings() {
   const firstRun = view !== null && view.providers.length === 0 && !view.config_error;
   useEffect(() => {
     if (firstRun && wizard === null) setWizard({ provider: null, first: true });
+    // A provider arrived some other way (a hand edit) before the learner
+    // started: show it rather than the wizard.
+    if (!firstRun && wizard?.first && !wizard.started) setWizard(null);
   }, [firstRun, wizard]);
 
   if (!view) {
@@ -106,6 +111,7 @@ export function Settings() {
             editingPreset={wizard.provider ? presetFor(wizard.provider) : null}
             taken={view.providers.map((p) => p.name)}
             onClose={wizard.first ? undefined : () => setWizard(null)}
+            onStarted={() => setWizard((w) => (w ? { ...w, started: true } : w))}
             onStay={() => {
               setWizard(null);
               run(call({ type: "get_settings" }));

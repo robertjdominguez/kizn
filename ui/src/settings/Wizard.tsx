@@ -62,6 +62,7 @@ export function Wizard({
   onClose,
   onFinished,
   onStay,
+  onStarted,
 }: {
   /** A provider to change; starts at its key (or model) with earlier steps done. */
   editing: ProviderView | null;
@@ -73,6 +74,8 @@ export function Wizard({
   onFinished: () => void;
   /** "Stay here" on Ready: back to the Settings list. */
   onStay: () => void;
+  /** The learner picked a provider: from here the wizard is theirs to finish. */
+  onStarted?: () => void;
 }) {
   const [preset, setPreset] = useState<Preset | null>(editingPreset);
   const [step, setStep] = useState<StepId>(editing ? (editingPreset?.kind === "cloud" ? "key" : "model") : "provider");
@@ -93,6 +96,7 @@ export function Wizard({
   const back = () => index > 0 && go(steps[index - 1] as StepId);
 
   const pick = (p: Preset) => {
+    onStarted?.();
     setPreset(p);
     setName(freeName(p.id, taken));
     setBaseUrl(p.baseUrl);
@@ -160,6 +164,9 @@ export function Wizard({
             )}
             {step === "address" && preset && (
               <AddressStep
+                name={name}
+                onName={setName}
+                editingName={!!editing}
                 baseUrl={baseUrl}
                 keyValue={key}
                 onBaseUrl={setBaseUrl}
@@ -655,6 +662,9 @@ function InstallStep({
 }
 
 function AddressStep({
+  name,
+  onName,
+  editingName,
   baseUrl,
   keyValue,
   onBaseUrl,
@@ -663,6 +673,10 @@ function AddressStep({
   onClose,
   verify,
 }: {
+  name: string;
+  onName: (v: string) => void;
+  /** A saved provider keeps its name. */
+  editingName: boolean;
   baseUrl: string;
   keyValue: string;
   onBaseUrl: (v: string) => void;
@@ -698,6 +712,16 @@ function AddressStep({
           value={keyValue}
           onChange={(e) => onKey(e.target.value)}
         />
+        <label className="mt-1 flex flex-col gap-1 text-xs text-ink-3">
+          Name in kizn
+          <input
+            className={FIELD}
+            aria-label="Name in kizn"
+            value={name}
+            onChange={(e) => onName(e.target.value.toLowerCase())}
+            disabled={editingName}
+          />
+        </label>
       </div>
       {error && <Problem>{error}</Problem>}
       <Nav
