@@ -1,6 +1,7 @@
 //! The @domain layer: the feature files in `features/`, driven against
-//! `kizn-app` in-process with a fake clock, a fixed seed and a throwaway
-//! data directory. Never a real model.
+//! `kizn-app` in-process with a fake clock, a fixed seed, keys in memory, a
+//! throwaway data directory, and model traffic sent to the fake model
+//! server. Never a real model.
 //!
 //! `KIZN_BDD_TAG` (set by `just bdd <tag>`) narrows the run to scenarios that
 //! also carry that tag.
@@ -9,11 +10,15 @@ use std::sync::Arc;
 
 use chrono::{TimeZone, Utc};
 use cucumber::{World, given, then, when};
-use kizn_app::{App, AppInfo, CONFIG_FILE, Command, Paths, Reply, TodayView};
+use kizn_app::{App, AppDeps, AppInfo, CONFIG_FILE, Command, MemorySecrets, Paths, Reply, TodayView};
 use kizn_core::{FakeClock, SeededRng};
+use kizn_model::fake::FakeServer;
 
-#[derive(Default, World)]
+#[derive(World)]
+#[world(init = Self::new)]
 struct Kizn {
+    fake: FakeServer,
+    secrets: Arc<MemorySecrets>,
     dir: Option<tempfile::TempDir>,
     app: Option<App>,
     today: Option<TodayView>,
@@ -27,8 +32,38 @@ impl std::fmt::Debug for Kizn {
 }
 
 impl Kizn {
+    async fn new() -> Self {
+        Kizn {
+            fake: FakeServer::start(0).await.expect("the fake model server"),
+            secrets: Arc::new(MemorySecrets::default()),
+            dir: None,
+            app: None,
+            today: None,
+            about: None,
+        }
+    }
+
     fn dir(&self) -> &std::path::Path {
         self.dir.as_ref().expect("no data directory: start with \"Given a fresh data directory\"").path()
+    }
+
+    /// Opens kizn on this scenario's data directory (a fresh one if none was
+    /// given yet). Scenarios that start mid-journey ("Given no model is
+    /// configured") get an open app without saying "When I open kizn".
+    fn ensure_open(&mut self) -> &App {
+        if self.dir.is_none() {
+            self.dir = Some(tempfile::tempdir().unwrap());
+        }
+        if self.app.is_none() {
+            let deps = AppDeps {
+                clock: Arc::new(FakeClock::at(Utc.with_ymd_and_hms(2026, 10, 25, 9, 0, 0).unwrap())),
+                rng: Arc::new(SeededRng::from_seed(1)),
+                secrets: self.secrets.clone(),
+                http: self.fake.client(),
+            };
+            self.app = Some(App::open(Paths::in_dir(self.dir()), deps).unwrap());
+        }
+        self.app.as_ref().unwrap()
     }
 
     fn app(&self) -> &App {
@@ -51,13 +86,10 @@ fn fresh_data_directory(w: &mut Kizn) {
 
 #[when("I open kizn")]
 async fn open_kizn(w: &mut Kizn) {
-    let clock = Arc::new(FakeClock::at(Utc.with_ymd_and_hms(2026, 10, 25, 9, 0, 0).unwrap()));
-    let app = App::open(Paths::in_dir(w.dir()), clock, Arc::new(SeededRng::from_seed(1))).unwrap();
-    match app.handle(Command::GetToday).await.unwrap() {
+    match w.ensure_open().handle(Command::GetToday).await.unwrap() {
         Reply::Today(t) => w.today = Some(t),
         other => panic!("GetToday replied {other:?}"),
     }
-    w.app = Some(app);
 }
 
 #[when("I open About")]

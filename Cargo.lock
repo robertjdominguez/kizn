@@ -2725,6 +2725,7 @@ dependencies = [
  "cucumber",
  "kizn-app",
  "kizn-core",
+ "kizn-model",
  "tempfile",
  "tokio",
 ]
