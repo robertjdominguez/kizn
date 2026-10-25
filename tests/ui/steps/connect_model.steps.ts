@@ -98,7 +98,7 @@ Then("all three roles use {string}", async ({ page }, name: string) => {
 });
 
 Then("I see that it can tutor but can't author items", async ({ page, world }) => {
-  await expect(page.getByText(`and ${world.model} can't. Try another model.`)).toBeVisible();
+  await expect(page.getByText(`and ${world.model} can't.`)).toBeVisible();
   await expect(page.getByText("streams replies")).toBeVisible();
 });
 

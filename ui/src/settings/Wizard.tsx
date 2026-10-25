@@ -862,6 +862,12 @@ function TestStep({
     return () => clearTimeout(t);
   }, [check, shown]);
 
+  // Failed outright: reached, but it wouldn't run a request at all (an
+  // account with no credit, an unknown model). The provider's reason is the
+  // whole story, and the other checks weren't tried.
+  const outright = !!check && check.reachable && check.problems.length === 1 && check.problems[0] === check.summary;
+  const account = !!check && check.summary.startsWith("the account can't");
+  const notTried = "not tried";
   const rows: { label: string; ok: boolean | null; detail: string }[] = [
     {
       label: "Reachable",
@@ -873,16 +879,18 @@ function TestStep({
       ok: check ? check.structured !== "none" : null,
       detail: !check?.reachable
         ? ""
-        : check.structured === "native"
-          ? "follows a JSON schema"
-          : check.structured === "prompted"
-            ? "answers in JSON; kizn parses it"
-            : "no JSON it could use",
+        : outright
+          ? notTried
+          : check.structured === "native"
+            ? "follows a JSON schema"
+            : check.structured === "prompted"
+              ? "answers in JSON; kizn parses it"
+              : "no JSON it could use",
     },
     {
       label: "Streaming",
       ok: check ? check.streaming : null,
-      detail: !check?.reachable ? "" : check.streaming ? "streams replies" : "can't stream",
+      detail: !check?.reachable ? "" : outright ? notTried : check.streaming ? "streams replies" : "can't stream",
     },
   ];
   const settled = check !== null && shown >= 3;
@@ -896,17 +904,26 @@ function TestStep({
     const t = setTimeout(() => ready.current(), 900);
     return () => clearTimeout(t);
   }, [settled, canAuthor]);
-  const keyProblem = check && !check.reachable && /key/.test(check.summary);
-  const fixTo: StepId | null = !check ? null : !check.reachable ? second : canAuthor ? null : "model";
+  const keyProblem = !!check && /key/.test(check.summary);
+  const fixTo: StepId | null = !check
+    ? null
+    : !check.reachable || account || keyProblem
+      ? second
+      : canAuthor
+        ? null
+        : "model";
   const fixLabel = !check
     ? ""
-    : !check.reachable
-      ? keyProblem
+    : account
+      ? "Back to the key"
+      : keyProblem
         ? "Fix the key"
-        : preset.kind === "local"
-          ? `Check ${preset.name}`
-          : "Fix the address"
-      : "Try another model";
+        : !check.reachable
+          ? preset.kind === "local"
+            ? `Check ${preset.name}`
+            : "Fix the address"
+          : "Try another model";
+  const sentence = (t: string) => `${t.charAt(0).toUpperCase()}${t.slice(1)}${/[.!?]$/.test(t) ? "" : "."}`;
 
   return (
     <div>
@@ -918,27 +935,40 @@ function TestStep({
       <ul className="mt-4 flex flex-col gap-2.5" aria-live="polite">
         {rows.map((r, i) => {
           const visible = settled || (check !== null && i < shown);
-          const state = !visible ? "pending" : r.ok ? "ok" : "fail";
+          const state = !visible ? "pending" : r.ok ? "ok" : r.detail === notTried ? "skipped" : "fail";
           return (
             <li key={r.label} className="flex items-center gap-3 text-sm">
               <span className="flex size-5 items-center justify-center">
                 {state === "pending" && <LoaderCircle size={15} className="animate-spin text-ink-4" aria-hidden />}
                 {state === "ok" && <CircleCheck size={16} className="text-success" aria-hidden />}
                 {state === "fail" && <CircleAlert size={16} className="text-warn" aria-hidden />}
+                {state === "skipped" && <span className="size-1.5 rounded-full bg-ink-4" aria-hidden />}
               </span>
               <span className="w-36 text-ink">{r.label}</span>
-              <span className="text-ink-3">{visible ? r.detail : "…"}</span>
+              <span className={state === "skipped" ? "text-ink-4" : "text-ink-3"}>{visible ? r.detail : "…"}</span>
             </li>
           );
         })}
       </ul>
       {error && <Problem>{error}</Problem>}
       {settled && !canAuthor && (
-        <p className="mt-4 text-sm text-ink-2">
-          {check.reachable
-            ? `kizn needs a model that can return structured output to write your practice items, and ${model} can't. Try another model.`
-            : `${check.summary.charAt(0).toUpperCase()}${check.summary.slice(1)}.`}
-        </p>
+        <div className="mt-4 flex flex-col gap-2 rounded-lg border border-warn/30 bg-warn/5 px-3 py-2.5 text-sm">
+          <p className="text-ink-2">
+            {!check.reachable || outright
+              ? sentence(check.summary)
+              : `kizn needs a model that can return structured output to write your practice items, and ${model} can't.`}
+          </p>
+          {check.reachable && !outright && check.problems.length > 0 && (
+            <ul className="list-disc pl-4 text-xs text-ink-3">
+              {check.problems.map((p) => (
+                <li key={p}>{p}</li>
+              ))}
+            </ul>
+          )}
+          {account && preset.keyUrl && (
+            <ExternalButton url={preset.keyUrl} label={`Open ${new URL(preset.keyUrl).host}`} />
+          )}
+        </div>
       )}
       <div className="mt-5 flex items-center gap-2">
         {settled && fixTo && (
