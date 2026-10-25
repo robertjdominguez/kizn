@@ -22,7 +22,7 @@ use tokio::sync::broadcast;
 
 pub use command::{
     AppError, AppInfo, CheckView, Command, ConceptView, DraftInput, DraftOutcome, Event, KeyView, OutcomeView,
-    ProviderView, Reply, Role, RolesView, SettingsView, TodayView, TopicSummary, TopicView,
+    ProviderView, Reply, Role, RolesView, SettingsView, SlotView, TodayView, TopicSummary, TopicView,
 };
 pub use config::{CONFIG_FILE, Config};
 pub use kizn_model::Http;

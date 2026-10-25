@@ -142,6 +142,23 @@ pub struct OutcomeView {
     #[ts(type = "number")]
     pub expected: i64,
     pub concepts: Vec<ConceptView>,
+    /// The kinds of practice the outcome gets, in order, each with how many
+    /// questions it has of how many it holds: one recall slot per concept,
+    /// then use it, at the target (when above use it), explain it back.
+    pub slots: Vec<SlotView>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct SlotView {
+    /// "recall", "apply", "target" or "explain".
+    pub kind: String,
+    /// The concept, for a recall slot.
+    pub concept: Option<String>,
+    #[ts(type = "number")]
+    pub have: i64,
+    #[ts(type = "number")]
+    pub size: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]

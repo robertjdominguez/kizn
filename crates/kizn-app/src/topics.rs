@@ -6,13 +6,13 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use kizn_core::bank::{MAX_CONCEPTS, MAX_OUTCOMES, bank_size};
+use kizn_core::bank::{ItemKind, MAX_CONCEPTS, MAX_OUTCOMES, bank_size, slots_for};
 use kizn_core::{Tier, new_id, sql_time};
 use kizn_model::{Client, JsonMode};
 use kizn_store::{ConceptRow, OutcomeRow, TopicRow};
 use serde_json::{Value, json};
 
-use crate::command::{ConceptView, DraftInput, OutcomeView, Role, TopicSummary, TopicView};
+use crate::command::{ConceptView, DraftInput, OutcomeView, Role, SlotView, TopicSummary, TopicView};
 use crate::config::Config;
 use crate::{App, AppError, Ctx, Event};
 
@@ -305,6 +305,30 @@ impl App {
                 .collect();
             let tier = Tier::parse(&o.target_tier).unwrap_or(Tier::Understand);
             let n = active.iter().find(|(id, _)| *id == o.id).map(|(_, n)| *n).unwrap_or(0);
+            let items = self.store.items(&o.id, Some("active"))?;
+            let concept_ids: Vec<String> = concepts.iter().map(|c| c.id.clone()).collect();
+            let slots = slots_for(tier, &concept_ids)
+                .into_iter()
+                .map(|slot| {
+                    let have = items
+                        .iter()
+                        .filter(|i| {
+                            ItemKind::parse(&i.kind) == Some(slot.kind)
+                                && slot.concept_id.as_ref().is_none_or(|c| i.concept_ids.first() == Some(c))
+                        })
+                        .count();
+                    SlotView {
+                        kind: slot.kind.name().into(),
+                        concept: slot
+                            .concept_id
+                            .as_ref()
+                            .and_then(|id| concepts.iter().find(|c| &c.id == id))
+                            .map(|c| c.statement.clone()),
+                        have: have.min(slot.kind.slot_size()) as i64,
+                        size: slot.kind.slot_size() as i64,
+                    }
+                })
+                .collect();
             outcomes.push(OutcomeView {
                 expected: bank_size(tier, concepts.len()) as i64,
                 id: o.id,
@@ -318,6 +342,7 @@ impl App {
                 bank_error: o.bank_error,
                 active: n,
                 concepts,
+                slots,
             });
         }
         Ok(TopicView {
