@@ -13,7 +13,7 @@
       "!ui/src/bindings",
       "!**/.features-gen",
       "!**/dist",
-      "site/**"
+      "docs/**"
     ]
   },
   "formatter": {
