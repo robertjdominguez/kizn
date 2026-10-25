@@ -1,21 +1,31 @@
-import { Plug, Sprout } from "lucide-react";
-import { motion } from "motion/react";
-import { useEffect, useState } from "react";
-import { rise } from "../motion";
+import { ChevronRight, CircleCheck, LoaderCircle, PencilLine, Plug, Sprout } from "lucide-react";
+import { AnimatePresence, motion } from "motion/react";
+import { useCallback, useEffect, useState } from "react";
+import type { TopicSummary } from "../bindings/TopicSummary";
+import { subscribe } from "../events";
+import { EASE, presence, rise } from "../motion";
 import { call, type TodayView } from "../rpc";
 
-// Home. Phase 0 has only the empty state: no topics yet, and whether a model
-// is connected. Due recalls, fringe outcomes, flags and the Practice button
-// arrive with the phases that make them.
+// Home: whether a model is connected, and your topics with how their
+// practice is coming along. Due recalls, fringe outcomes, flags and the
+// Practice button arrive with the phases that make them.
 export function Today() {
   const [today, setToday] = useState<TodayView | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
+  const load = useCallback(() => {
     call({ type: "get_today" })
       .then(setToday)
       .catch((e: Error) => setError(e.message));
   }, []);
+
+  // Follows topics as they're drafted and their questions are written.
+  useEffect(() => {
+    load();
+    return subscribe((e) => {
+      if (e.type === "topic_changed" || e.type === "config_changed") load();
+    });
+  }, [load]);
 
   if (error) {
     return <p className="p-6 text-sm text-danger">Couldn't load Today: {error}</p>;
@@ -36,8 +46,8 @@ export function Today() {
           <div className="flex flex-col gap-0.5">
             <p className="font-medium text-ink">No model connected</p>
             <p className="text-ink-3">
-              kizn writes practice items and tutors with a model you choose: a local one or a provider you have a key
-              for.{" "}
+              kizn writes practice questions and tutors with a model you choose: a local one or a provider you have a
+              key for.{" "}
               <a href="#/settings" className="text-accent hover:underline">
                 Connect a model
               </a>
@@ -45,6 +55,27 @@ export function Today() {
           </div>
         </motion.section>
       )}
+
+      <AnimatePresence initial={false}>
+        {today.topics.length > 0 && (
+          <motion.section
+            key="topics"
+            variants={rise}
+            {...presence}
+            aria-label="Your topics"
+            className="flex flex-col gap-2"
+          >
+            <h2 className="text-[11px] font-medium uppercase tracking-wide text-ink-4">Your topics</h2>
+            <ul className="flex flex-col gap-2">
+              <AnimatePresence initial={false}>
+                {today.topics.map((t) => (
+                  <TopicCard key={t.id} topic={t} />
+                ))}
+              </AnimatePresence>
+            </ul>
+          </motion.section>
+        )}
+      </AnimatePresence>
 
       {today.topics.length === 0 && (
         <motion.section
@@ -74,4 +105,79 @@ export function Today() {
       )}
     </div>
   );
+}
+
+const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`;
+
+function TopicCard({ topic: t }: { topic: TopicSummary }) {
+  // Hover (or keyboard focus) reveals the detail behind a short status.
+  const [hovered, setHovered] = useState(false);
+  return (
+    <motion.li variants={rise} {...presence} layout>
+      <a
+        href={`#/topic/${encodeURIComponent(t.id)}`}
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
+        onFocus={() => setHovered(true)}
+        onBlur={() => setHovered(false)}
+        className="group flex items-center gap-4 rounded-lg border border-hairline bg-subtle px-4 py-3 transition-colors hover:border-accent/40 hover:bg-raised/30"
+      >
+        <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+          <span className="truncate text-sm font-medium text-ink">{t.title}</span>
+          <span className="text-xs text-ink-3">
+            {plural(Number(t.outcomes), "outcome")} · {plural(Number(t.concepts), "concept")}
+          </span>
+        </div>
+        <AnimatePresence mode="wait" initial={false}>
+          <motion.span key={status(t)} variants={rise} {...presence} className="shrink-0 text-xs">
+            <TopicStatus topic={t} hovered={hovered} />
+          </motion.span>
+        </AnimatePresence>
+        <ChevronRight size={15} className="shrink-0 text-ink-4 transition-colors group-hover:text-accent" aria-hidden />
+      </a>
+    </motion.li>
+  );
+}
+
+const status = (t: TopicSummary) => (t.status === "draft" ? "draft" : t.preparing ? "preparing" : "ready");
+
+function TopicStatus({ topic: t, hovered }: { topic: TopicSummary; hovered: boolean }) {
+  switch (status(t)) {
+    case "draft":
+      return (
+        <span className="flex items-center gap-1.5 text-ink-3">
+          <PencilLine size={13} aria-hidden /> Draft · finish setting it up
+        </span>
+      );
+    case "preparing":
+      return (
+        <span className="flex items-center gap-1.5 text-accent">
+          <LoaderCircle size={13} className="animate-spin" aria-hidden />
+          <span>Preparing</span>
+          <AnimatePresence initial={false}>
+            {hovered && (
+              <motion.span
+                key="detail"
+                initial={{ width: 0, opacity: 0 }}
+                animate={{ width: "auto", opacity: 1, transition: { duration: 0.2, ease: EASE } }}
+                exit={{ width: 0, opacity: 0, transition: { duration: 0.15, ease: EASE } }}
+                className="overflow-hidden whitespace-nowrap tabular-nums"
+                aria-hidden
+              >
+                · {t.active} of ~{t.expected} ready
+              </motion.span>
+            )}
+          </AnimatePresence>
+          <span className="sr-only">
+            {t.active} of about {t.expected} questions ready
+          </span>
+        </span>
+      );
+    default:
+      return (
+        <span className="flex items-center gap-1.5 text-success">
+          <CircleCheck size={13} aria-hidden /> {plural(Number(t.active), "question")} ready
+        </span>
+      );
+  }
 }
