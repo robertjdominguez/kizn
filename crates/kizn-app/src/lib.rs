@@ -9,16 +9,19 @@ mod events;
 mod paths;
 mod secrets;
 mod settings;
+mod topics;
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::atomic::AtomicBool;
+use std::sync::{Arc, Mutex};
 
 use kizn_core::{Clock, Rng, SeededRng, SystemClock};
 use kizn_store::Store;
 use tokio::sync::broadcast;
 
 pub use command::{
-    AppError, AppInfo, CheckView, Command, Event, KeyView, ProviderView, Reply, Role, RolesView, SettingsView,
-    TodayView, TopicSummary,
+    AppError, AppInfo, CheckView, Command, ConceptView, DraftInput, DraftOutcome, Event, KeyView, OutcomeView,
+    ProviderView, Reply, Role, RolesView, SettingsView, TodayView, TopicSummary, TopicView,
 };
 pub use config::{CONFIG_FILE, Config};
 pub use kizn_model::Http;
@@ -50,12 +53,27 @@ impl AppDeps {
     }
 }
 
-pub struct App {
+/// What background jobs (drafting, bank writing) need: cheap to clone.
+#[derive(Clone)]
+pub struct Ctx {
     paths: Paths,
-    store: Store,
+    store: Arc<Store>,
     deps: AppDeps,
     events: broadcast::Sender<Event>,
+}
+
+pub struct App {
+    ctx: Ctx,
+    /// Drafts being drafted, and the flag that stops each between calls.
+    drafting: Mutex<HashMap<String, Arc<AtomicBool>>>,
     _watcher: Option<events::ConfigWatcher>,
+}
+
+impl std::ops::Deref for App {
+    type Target = Ctx;
+    fn deref(&self) -> &Ctx {
+        &self.ctx
+    }
 }
 
 impl App {
@@ -73,7 +91,11 @@ impl App {
         let watcher = events::watch_config(&paths.config_dir, events.clone())
             .map_err(|e| eprintln!("kizn: not watching config.toml: {e}"))
             .ok();
-        Ok(App { paths, store, deps, events, _watcher: watcher })
+        Ok(App {
+            ctx: Ctx { paths, store: Arc::new(store), deps, events },
+            drafting: Mutex::new(HashMap::new()),
+            _watcher: watcher,
+        })
     }
 
     pub fn paths(&self) -> &Paths {
@@ -88,8 +110,7 @@ impl App {
         match cmd {
             Command::GetToday => {
                 let config = Config::load(&self.paths.config_dir)?;
-                let topics =
-                    self.store.all_topics()?.into_iter().map(|t| TopicSummary { id: t.id, title: t.title }).collect();
+                let topics = self.topic_summaries()?;
                 Ok(Reply::Today(TodayView { topics, model_configured: config.model_configured() }))
             }
             Command::GetAppInfo => Ok(Reply::AppInfo(AppInfo {
@@ -108,6 +129,24 @@ impl App {
             Command::RemoveProvider { name } => self.remove_provider(&name).map(Reply::Settings),
             Command::TestProvider { name } => self.test_provider(&name).await.map(Reply::Settings),
             Command::AssignRole { role, provider } => self.assign_role(role, provider.as_deref()).map(Reply::Settings),
+            Command::StartTopic { title, goal } => self.start_topic(&title, &goal).map(Reply::Topic),
+            Command::StopDrafting { topic_id } => self.stop_drafting(&topic_id).map(Reply::Topic),
+            Command::SaveDraft { topic_id, draft } => self.save_draft(&topic_id, &draft).map(Reply::Topic),
+            Command::ConfirmTopic { topic_id } => self.confirm_topic(&topic_id).map(Reply::Topic),
+            Command::GetTopic { topic_id } => self.topic_view(&topic_id).map(Reply::Topic),
+            Command::RetryBank { outcome_id } => self.retry_bank(&outcome_id).map(Reply::Topic),
         }
+    }
+}
+
+impl App {
+    /// Bank writing arrives in the next step; confirming already queues it.
+    fn wake_bank(&self) {}
+
+    fn retry_bank(&self, outcome_id: &str) -> Result<TopicView, AppError> {
+        let o = self.store.outcome(outcome_id)?.ok_or_else(|| AppError::Refused("there's no such outcome".into()))?;
+        self.store.set_bank_state(&o.id, "waiting", None, None)?;
+        self.wake_bank();
+        self.topic_view(&o.topic_id)
     }
 }

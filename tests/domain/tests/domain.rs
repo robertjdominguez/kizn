@@ -11,8 +11,8 @@ use std::sync::Arc;
 use chrono::{TimeZone, Utc};
 use cucumber::{World, given, then, when};
 use kizn_app::{
-    App, AppDeps, AppError, AppInfo, CONFIG_FILE, Command, Event, MemorySecrets, Paths, ProviderView, Reply, Role,
-    Secrets, SettingsView, TodayView,
+    App, AppDeps, AppError, AppInfo, CONFIG_FILE, Command, DraftInput, DraftOutcome, Event, MemorySecrets, Paths,
+    ProviderView, Reply, Role, Secrets, SettingsView, TodayView, TopicView,
 };
 use kizn_core::{FakeClock, SeededRng};
 use kizn_model::fake::{Behaviour, FakeServer};
@@ -33,6 +33,8 @@ struct Kizn {
     /// A closed port, for "nothing is listening".
     closed_port: Option<u16>,
     events: Option<broadcast::Receiver<Event>>,
+    topic: Option<TopicView>,
+    goal: Option<String>,
 }
 
 impl std::fmt::Debug for Kizn {
@@ -54,7 +56,37 @@ impl Kizn {
             settings: None,
             closed_port: None,
             events: None,
+            topic: None,
+            goal: None,
         }
+    }
+
+    async fn topic_from(&mut self, cmd: Command) -> TopicView {
+        match self.command(cmd).await {
+            Ok(Reply::Topic(t)) => {
+                self.topic = Some(t.clone());
+                t
+            }
+            other => panic!("expected a Topic, got {other:?}"),
+        }
+    }
+
+    fn topic_id(&self) -> String {
+        self.topic.as_ref().expect("no topic: start one first").id.clone()
+    }
+
+    /// Re-reads the topic until `done` holds (background jobs move it on),
+    /// for up to 10 seconds.
+    async fn wait_for(&mut self, what: &str, done: impl Fn(&TopicView) -> bool) -> TopicView {
+        let topic_id = self.topic_id();
+        for _ in 0..500 {
+            let t = self.topic_from(Command::GetTopic { topic_id: topic_id.clone() }).await;
+            if done(&t) {
+                return t;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        panic!("waited 10s for {what}: {:#?}", self.topic);
     }
 
     async fn command(&mut self, cmd: Command) -> Result<Reply, AppError> {
@@ -183,6 +215,107 @@ fn i_see(w: &mut Kizn, text: String) {
 fn no_model_configured(w: &mut Kizn) {
     assert!(!w.today().model_configured, "Today says a model is configured");
     assert!(!w.dir().join(CONFIG_FILE).exists(), "first run wrote a config.toml");
+}
+
+// ---- start a topic -------------------------------------------------------------
+
+#[given("a configured author model")]
+async fn configured_author(w: &mut Kizn) {
+    let url = w.fake.openai_url(Behaviour::Works);
+    w.add_provider("local", "openai", &url, "qwen3:32b", None).await;
+    w.settings_from(Command::TestProvider { name: "local".into() }).await;
+}
+
+#[when(expr = "I start a topic {string} with the goal {string}")]
+async fn start_topic(w: &mut Kizn, title: String, goal: String) {
+    w.goal = Some(goal.clone());
+    w.topic_from(Command::StartTopic { title, goal }).await;
+    w.wait_for("the draft", |t| t.draft_state != "drafting").await;
+}
+
+#[given("a drafted topic")]
+async fn drafted_topic(w: &mut Kizn) {
+    start_topic(w, "Container fundamentals".into(), "explain to customers why deployments behave differently".into())
+        .await;
+    assert_eq!(w.topic.as_ref().unwrap().draft_state, "drafted");
+}
+
+#[then(expr = "I see {int} to {int} drafted outcomes, each starting with a verb")]
+fn drafted_outcomes(w: &mut Kizn, min: usize, max: usize) {
+    let t = w.topic.as_ref().unwrap();
+    assert!((min..=max).contains(&t.outcomes.len()), "{} outcomes", t.outcomes.len());
+    for o in &t.outcomes {
+        let first = o.statement.split_whitespace().next().unwrap_or("");
+        let looks_like_a_verb = first.chars().next().is_some_and(char::is_uppercase)
+            && first.chars().all(char::is_alphabetic)
+            && !["The", "A", "An", "Understanding", "Knowledge", "Introduction"].contains(&first);
+        assert!(looks_like_a_verb, "\"{}\" doesn't start with a verb", o.statement);
+    }
+}
+
+#[then("each outcome has a target with a reason that quotes my goal")]
+fn targets_quote_goal(w: &mut Kizn) {
+    let goal = w.goal.clone().unwrap();
+    for o in &w.topic.as_ref().unwrap().outcomes {
+        assert!(!o.target_plain.is_empty(), "outcome {} has no target", o.ord);
+        assert!(o.reason.contains(&goal), "outcome {}'s reason doesn't quote the goal: {}", o.ord, o.reason);
+    }
+}
+
+#[then(expr = "each outcome has {int} to {int} concepts")]
+fn concept_counts(w: &mut Kizn, min: usize, max: usize) {
+    for o in &w.topic.as_ref().unwrap().outcomes {
+        assert!((min..=max).contains(&o.concepts.len()), "outcome {} has {} concepts", o.ord, o.concepts.len());
+    }
+}
+
+#[when(expr = "I rename a concept, delete an outcome and change a target to {string}")]
+async fn shape(w: &mut Kizn, target: String) {
+    let t = w.topic.clone().unwrap();
+    let mut outcomes: Vec<DraftOutcome> = t
+        .outcomes
+        .iter()
+        .map(|o| DraftOutcome {
+            id: Some(o.id.clone()),
+            statement: o.statement.clone(),
+            target: o.target.clone(),
+            reason: o.reason.clone(),
+            concepts: o.concepts.iter().map(|c| c.statement.clone()).collect(),
+        })
+        .collect();
+    outcomes[0].concepts[0] = "An image is immutable layers plus config".into();
+    outcomes.pop();
+    outcomes[0].target = target;
+    let topic_id = t.id.clone();
+    let shaped = w.topic_from(Command::SaveDraft { topic_id, draft: DraftInput { outcomes } }).await;
+    assert_eq!(shaped.outcomes.len(), t.outcomes.len() - 1);
+    assert_eq!(shaped.outcomes[0].concepts[0].statement, "An image is immutable layers plus config");
+    assert_eq!(shaped.outcomes[0].target, "evaluate");
+}
+
+#[when("I confirm the topic")]
+async fn confirm(w: &mut Kizn) {
+    let topic_id = w.topic_id();
+    w.topic_from(Command::ConfirmTopic { topic_id }).await;
+}
+
+#[then("bank writing is queued for each outcome")]
+fn bank_queued(w: &mut Kizn) {
+    let t = w.topic.as_ref().unwrap();
+    assert_eq!(t.status, "confirmed");
+    for o in &t.outcomes {
+        assert!(o.bank_state != "failed", "outcome {} failed: {:?}", o.ord, o.bank_error);
+    }
+}
+
+// The UI owns the words: "writing items" is an outcome whose bank is
+// waiting its turn or being written.
+#[then(expr = "the topic page shows {string} on each outcome")]
+fn topic_page_shows(w: &mut Kizn, text: String) {
+    assert_eq!(text, "writing items", "no @domain meaning for {text:?}");
+    for o in &w.topic.as_ref().expect("no topic").outcomes {
+        assert!(["waiting", "writing"].contains(&o.bank_state.as_str()), "outcome {} is {}", o.ord, o.bank_state);
+    }
 }
 
 // ---- connect a model -----------------------------------------------------------

@@ -2,5 +2,6 @@
 import type { AppInfo } from "./AppInfo";
 import type { SettingsView } from "./SettingsView";
 import type { TodayView } from "./TodayView";
+import type { TopicView } from "./TopicView";
 
-export type Reply = { "type": "today", "data": TodayView } | { "type": "app_info", "data": AppInfo } | { "type": "settings", "data": SettingsView } | { "type": "models", "data": Array<string> };
+export type Reply = { "type": "today", "data": TodayView } | { "type": "app_info", "data": AppInfo } | { "type": "settings", "data": SettingsView } | { "type": "models", "data": Array<string> } | { "type": "topic", "data": TopicView };
