@@ -1,6 +1,7 @@
 import { X } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useState } from "react";
+import { Reveal } from "../components/Reveal";
 import { fade, presence, rise } from "../motion";
 import { type AppInfo, call } from "../rpc";
 
@@ -50,17 +51,21 @@ export function About({ open, onClose }: { open: boolean; onClose: () => void })
                 <X size={14} aria-hidden />
               </button>
             </div>
-            {error && <p className="mt-3 text-sm text-danger">Couldn't read kizn's details: {error}</p>}
-            {info && (
-              <dl className="mt-3 grid grid-cols-[max-content_1fr] gap-x-4 gap-y-2 text-sm">
-                <dt className="text-ink-3">Version</dt>
-                <dd className="text-ink">kizn {info.version}</dd>
-                <dt className="text-ink-3">Data</dt>
-                <dd className="break-all font-mono text-xs text-ink-2">{info.data_dir}</dd>
-                <dt className="text-ink-3">Config</dt>
-                <dd className="break-all font-mono text-xs text-ink-2">{info.config_dir}</dd>
-              </dl>
-            )}
+            <Reveal when={error} initial>
+              <p className="mt-3 text-sm text-danger">Couldn't read kizn's details: {error}</p>
+            </Reveal>
+            <Reveal when={info} initial>
+              {info && (
+                <dl className="mt-3 grid grid-cols-[max-content_1fr] gap-x-4 gap-y-2 text-sm">
+                  <dt className="text-ink-3">Version</dt>
+                  <dd className="text-ink">kizn {info.version}</dd>
+                  <dt className="text-ink-3">Data</dt>
+                  <dd className="break-all font-mono text-xs text-ink-2">{info.data_dir}</dd>
+                  <dt className="text-ink-3">Config</dt>
+                  <dd className="break-all font-mono text-xs text-ink-2">{info.config_dir}</dd>
+                </dl>
+              )}
+            </Reveal>
           </motion.div>
         </motion.div>
       )}

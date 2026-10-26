@@ -25,7 +25,10 @@ const ITEMS_PER_CALL: usize = 2;
 /// After an account or connection failure, when to try again by itself.
 const RETRY_AFTER_MINUTES: i64 = 5;
 /// After two batches in a row accept nothing, how long to leave it.
-const BACKOFF_HOURS: i64 = 6;
+const BACKOFF_HOURS: i64 = 1;
+/// Runs in a row that accept nothing before an outcome backs off. Local
+/// models are inconsistent rather than unable; a few tries is fair.
+const EMPTY_RUNS_BEFORE_BACKOFF: usize = 4;
 
 const WRITE_ITEMS: &str = "kizn-task: write-items
 You write practice items for one adult learner. They are shown later, one at a time, as cards; nobody is waiting on you. Code checks every item, then another model answers each one blind, so write items with one clearly best answer.
@@ -170,8 +173,29 @@ impl Ctx {
                 ItemKind::Apply => Tier::apply_tier_for(target).name().to_string(),
                 ItemKind::Target | ItemKind::Explain => target.name().to_string(),
             };
+            // The rules that refuse most items, said concretely for this
+            // request: models follow a named constraint better than a general one.
+            let concept_rule = match (slot.kind, slot_concept) {
+                (ItemKind::Recall, Some(c)) => format!(
+                    "Each item tests exactly one concept: \"{}\". Set \"concepts\" to [\"{}\"] and nothing else. \
+                     (kizn counts each answer as evidence about that one concept, so an item that brings in another \
+                     concept is refused.) The tier is remember or understand.",
+                    c.statement, c.statement
+                ),
+                (ItemKind::Explain, _) => "Write explain items: a prompt and an exemplar, no options.".to_string(),
+                (kind, _) => format!(
+                    "Each item is a scenario that needs at least two of the concepts listed, named in \"concepts\" \
+                     exactly as written there. The tier is {tier_ask}.{}",
+                    if kind == ItemKind::Target { " It's the outcome's target level." } else { "" }
+                ),
+            };
             let ask = format!(
-                "<input>\n{}\n</input>",
+                "Write {count} {} item{}. {concept_rule} A wrong option's \"foundation\" names a more basic topic \
+                 than \"{}\", never \"{}\" itself (or \"none\").\n\n<input>\n{}\n</input>",
+                slot.kind.name(),
+                if count == 1 { "" } else { "s" },
+                topic.title,
+                topic.title,
                 json!({
                     "topic": topic.title, "goal": topic.goal, "outcome": o.statement, "target_tier": target.name(),
                     "kind": slot.kind.name(), "tier": tier_ask, "count": count,
@@ -265,7 +289,7 @@ impl Ctx {
                 filling = Some((slot, left));
             }
             empty_batches = if counts.accepted == 0 { empty_batches + 1 } else { 0 };
-            if empty_batches >= 2 {
+            if empty_batches >= EMPTY_RUNS_BEFORE_BACKOFF {
                 return Ok(Filled::NothingUsable);
             }
         }

@@ -125,16 +125,18 @@ export function Settings() {
           <>
             <ConfigNotice path={view.config_path} />
             <div className="flex flex-col gap-3">
-              {view.providers.map((p) => (
-                <ProviderCard
-                  key={p.name}
-                  provider={p}
-                  testing={testing === p.name}
-                  onTest={() => test(p.name)}
-                  onEdit={() => setWizard({ provider: p })}
-                  onRemove={() => run(call({ type: "remove_provider", name: p.name }))}
-                />
-              ))}
+              <AnimatePresence initial={false}>
+                {view.providers.map((p) => (
+                  <ProviderCard
+                    key={p.name}
+                    provider={p}
+                    testing={testing === p.name}
+                    onTest={() => test(p.name)}
+                    onEdit={() => setWizard({ provider: p })}
+                    onRemove={() => run(call({ type: "remove_provider", name: p.name }))}
+                  />
+                ))}
+              </AnimatePresence>
             </div>
             <div>
               <button
@@ -234,8 +236,8 @@ function ProviderCard({
   return (
     <motion.article
       variants={rise}
-      initial="hidden"
-      animate="shown"
+      {...presence}
+      layout
       aria-label={`Provider ${p.name}`}
       className="flex flex-col gap-3 rounded-lg border border-hairline bg-subtle px-4 py-3"
     >
@@ -275,7 +277,11 @@ function ProviderCard({
         <code>{p.base_url}</code>
         <KeyLine keyView={p.key} />
       </div>
-      <CheckLine check={p.check} />
+      <AnimatePresence mode="wait" initial={false}>
+        <motion.div key={p.check?.tested_at ?? "untested"} variants={rise} {...presence}>
+          <CheckLine check={p.check} />
+        </motion.div>
+      </AnimatePresence>
     </motion.article>
   );
 }

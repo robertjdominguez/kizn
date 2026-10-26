@@ -12,6 +12,7 @@ import { AnimatePresence, motion } from "motion/react";
 import { useCallback, useEffect, useId, useState } from "react";
 import type { OutcomeView } from "../bindings/OutcomeView";
 import type { SlotView } from "../bindings/SlotView";
+import { Reveal } from "../components/Reveal";
 import { subscribe } from "../events";
 import { settingsCanFix } from "../fixable";
 import { EASE, presence, rise } from "../motion";
@@ -350,7 +351,9 @@ function FailurePanel({ outcome: o }: { outcome: OutcomeView }) {
         {reason.slice(1)}
         {/[.!?]$/.test(reason) ? "" : "."} <span className="text-ink-3">kizn will try again in a few minutes.</span>
       </p>
-      {error && <p className="text-danger">{error}</p>}
+      <Reveal when={error}>
+        <p className="text-danger">{error}</p>
+      </Reveal>
       <div className="flex items-center gap-2">
         <button
           type="button"
