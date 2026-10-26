@@ -92,8 +92,11 @@ pub struct BankedItem<'a> {
     pub concept_ids: &'a [String],
 }
 
-/// The slots to write for, and how many: those below REFILL_BELOW unseen
-/// active items, topped up to their size.
+/// The slots to write for, and how many. A slot is written up to its full
+/// size until it has held that many active items; after that, once practice
+/// has used its items up (fewer than REFILL_BELOW unseen), it's topped back
+/// up. Either way the answer depends only on what's stored, so a restart
+/// mid-write carries on where it was.
 pub fn bank_needs(
     target: Tier,
     concept_ids: &[String],
@@ -103,15 +106,18 @@ pub fn bank_needs(
     slots_for(target, concept_ids)
         .into_iter()
         .filter_map(|slot| {
-            let fresh = active
+            let in_slot: Vec<&BankedItem> = active
                 .iter()
                 .filter(|i| {
-                    i.kind == slot.kind
-                        && slot.concept_id.as_ref().is_none_or(|c| i.concept_ids.first() == Some(c))
-                        && !attempted.contains(i.id)
+                    i.kind == slot.kind && slot.concept_id.as_ref().is_none_or(|c| i.concept_ids.first() == Some(c))
                 })
-                .count();
-            (fresh < REFILL_BELOW).then(|| (slot.clone(), slot.kind.slot_size() - fresh))
+                .collect();
+            let fresh = in_slot.iter().filter(|i| !attempted.contains(i.id)).count();
+            let size = slot.kind.slot_size();
+            let short = size.saturating_sub(in_slot.len());
+            let refill = if fresh < REFILL_BELOW { size - fresh } else { 0 };
+            let write = short.max(refill);
+            (write > 0).then(|| (slot.clone(), write))
         })
         .collect()
 }
@@ -661,6 +667,24 @@ mod tests {
         assert_eq!(needs.len(), 5); // 2 recall, apply, target, explain
         assert_eq!(bank_size(Tier::Evaluate, 2), 8 + 4 + 4 + 2);
         assert_eq!(bank_size(Tier::Apply, 2), 8 + 4 + 2);
+    }
+
+    #[test]
+    fn a_partly_filled_slot_is_written_to_full_size() {
+        let concepts = vec!["c1".to_string()];
+        let ids: Vec<String> = (0..3).map(|i| format!("i{i}")).collect();
+        let concept = vec!["c1".to_string()];
+        let three: Vec<BankedItem> =
+            ids.iter().map(|id| BankedItem { id, kind: ItemKind::Recall, concept_ids: &concept }).collect();
+        let needs = bank_needs(Tier::Understand, &concepts, &three, &HashSet::new());
+        let recall = needs.iter().find(|(s, _)| s.kind == ItemKind::Recall).expect("recall still needs one");
+        assert_eq!(recall.1, 1, "3 of 4 written: one more, not a refill decision");
+        // Practised down to one unseen: topped back up.
+        let attempted: HashSet<String> = ids[..2].iter().cloned().collect();
+        let mut four = three;
+        four.push(BankedItem { id: "i3", kind: ItemKind::Recall, concept_ids: &concept });
+        let needs = bank_needs(Tier::Understand, &concepts, &four, &attempted);
+        assert!(needs.iter().all(|(s, _)| s.kind != ItemKind::Recall), "two unseen of four: no refill yet");
     }
 
     #[test]
