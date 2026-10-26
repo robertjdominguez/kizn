@@ -3,7 +3,7 @@ import { AnimatePresence, motion } from "motion/react";
 import { useCallback, useEffect, useState } from "react";
 import type { TopicSummary } from "../bindings/TopicSummary";
 import { subscribe } from "../events";
-import { EASE, presence, rise } from "../motion";
+import { presence, rise } from "../motion";
 import { call, type TodayView } from "../rpc";
 
 // Home: whether a model is connected, and your topics with how their
@@ -116,16 +116,10 @@ export function Today() {
 const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`;
 
 function TopicCard({ topic: t }: { topic: TopicSummary }) {
-  // Hover (or keyboard focus) reveals the detail behind a short status.
-  const [hovered, setHovered] = useState(false);
   return (
     <motion.li variants={rise} {...presence} layout>
       <a
         href={t.status === "draft" ? `#/setup/${encodeURIComponent(t.id)}` : `#/topic/${encodeURIComponent(t.id)}`}
-        onMouseEnter={() => setHovered(true)}
-        onMouseLeave={() => setHovered(false)}
-        onFocus={() => setHovered(true)}
-        onBlur={() => setHovered(false)}
         className="group flex items-center gap-4 rounded-lg border border-hairline bg-subtle px-4 py-3 transition-colors hover:border-accent/40 hover:bg-raised/30"
       >
         <div className="flex min-w-0 flex-1 flex-col gap-0.5">
@@ -136,7 +130,7 @@ function TopicCard({ topic: t }: { topic: TopicSummary }) {
         </div>
         <AnimatePresence mode="wait" initial={false}>
           <motion.span key={status(t)} variants={rise} {...presence} className="shrink-0 text-xs">
-            <TopicStatus topic={t} hovered={hovered} />
+            <TopicStatus topic={t} />
           </motion.span>
         </AnimatePresence>
         <ChevronRight size={15} className="shrink-0 text-ink-4 transition-colors group-hover:text-accent" aria-hidden />
@@ -147,43 +141,46 @@ function TopicCard({ topic: t }: { topic: TopicSummary }) {
 
 const status = (t: TopicSummary) => (t.status === "draft" ? "draft" : t.preparing ? "preparing" : "ready");
 
-function TopicStatus({ topic: t, hovered }: { topic: TopicSummary; hovered: boolean }) {
-  switch (status(t)) {
-    case "draft":
-      return (
-        <span className="flex items-center gap-1.5 text-ink-3">
-          <PencilLine size={13} aria-hidden /> Draft · finish setting it up
-        </span>
-      );
-    case "preparing":
-      return (
-        <span className="flex items-center gap-1.5 text-accent">
-          <LoaderCircle size={13} className="animate-spin" aria-hidden />
-          <span>Preparing</span>
-          <AnimatePresence initial={false}>
-            {hovered && (
-              <motion.span
-                key="detail"
-                initial={{ width: 0, opacity: 0 }}
-                animate={{ width: "auto", opacity: 1, transition: { duration: 0.2, ease: EASE } }}
-                exit={{ width: 0, opacity: 0, transition: { duration: 0.15, ease: EASE } }}
-                className="overflow-hidden whitespace-nowrap tabular-nums"
-                aria-hidden
-              >
-                · {t.active} of ~{t.expected} ready
-              </motion.span>
-            )}
-          </AnimatePresence>
-          <span className="sr-only">
-            {t.active} of about {t.expected} questions ready
-          </span>
-        </span>
-      );
-    default:
-      return (
-        <span className="flex items-center gap-1.5 text-success">
-          <CircleCheck size={13} aria-hidden /> {plural(Number(t.active), "question")} ready
-        </span>
-      );
-  }
+/** An always-visible anchor (icon and a word); its detail grows in beside it
+ *  while the status text is hovered, or the card has keyboard focus. CSS
+ *  only: a grid column that animates from zero width to its content. */
+function TopicStatus({ topic: t }: { topic: TopicSummary }) {
+  const s = status(t);
+  const { icon, word, detail, spoken, tone } =
+    s === "draft"
+      ? {
+          icon: <PencilLine size={13} aria-hidden />,
+          word: "Draft",
+          detail: "finish setting it up",
+          spoken: "Draft: finish setting it up",
+          tone: "text-ink-3",
+        }
+      : s === "preparing"
+        ? {
+            icon: <LoaderCircle size={13} className="animate-spin" aria-hidden />,
+            word: "Preparing",
+            detail: `${t.active} of ~${t.expected} ready`,
+            spoken: `Preparing: ${t.active} of about ${t.expected} questions ready`,
+            tone: "text-accent",
+          }
+        : {
+            icon: <CircleCheck size={13} aria-hidden />,
+            word: "Ready",
+            detail: plural(Number(t.active), "question"),
+            spoken: `Ready: ${plural(Number(t.active), "question")}`,
+            tone: "text-success",
+          };
+  return (
+    <span className={`group/status flex items-center gap-1.5 ${tone}`}>
+      {icon}
+      <span aria-hidden>{word}</span>
+      <span
+        aria-hidden
+        className="grid grid-cols-[0fr] opacity-0 transition-[grid-template-columns,opacity] duration-200 ease-out group-hover/status:grid-cols-[1fr] group-hover/status:opacity-100 group-focus-visible:grid-cols-[1fr] group-focus-visible:opacity-100"
+      >
+        <span className="overflow-hidden whitespace-nowrap tabular-nums">· {detail}</span>
+      </span>
+      <span className="sr-only">{spoken}</span>
+    </span>
+  );
 }
