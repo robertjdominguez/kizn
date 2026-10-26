@@ -1,4 +1,18 @@
-import { ArrowRight, CircleAlert, CircleCheck, LoaderCircle, PencilRuler, Sparkles, Target, X } from "lucide-react";
+import {
+  ArrowRight,
+  ChevronDown,
+  ChevronUp,
+  Circle,
+  CircleAlert,
+  CircleCheck,
+  LoaderCircle,
+  PencilRuler,
+  Plus,
+  Sparkles,
+  Target,
+  Trash2,
+  X,
+} from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { type FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { Progress, type ProgressStep } from "../components/Progress";
@@ -8,7 +22,7 @@ import { call, type TopicView } from "../rpc";
 
 // Starting a topic, one card per step under the progress line: Goal → Draft
 // → Shape → Confirm, then the topic page. The author model drafts; the
-// learner decides. Built in small reviewed steps: Goal, then Draft.
+// learner decides. Built in small reviewed steps: Goal, Draft, then Shape.
 
 const STEPS: ProgressStep[] = [
   { label: "Goal", icon: Target },
@@ -55,7 +69,9 @@ export function Setup({ topicId }: { topicId?: string }) {
   }, [topicId, drafting]);
 
   return (
-    <div className="mx-auto flex w-full max-w-2xl flex-col gap-5 px-6 py-8">
+    <div
+      className={`mx-auto flex w-full flex-col gap-5 px-6 py-8 transition-[max-width] duration-300 ${step === 2 ? "max-w-3xl" : "max-w-2xl"}`}
+    >
       <Progress steps={STEPS} index={step} />
       {error && <p className="text-sm text-danger">{error}</p>}
       <AnimatePresence mode="wait" initial={false}>
@@ -69,7 +85,8 @@ export function Setup({ topicId }: { topicId?: string }) {
         >
           {step === 0 && <GoalStep />}
           {step === 1 && <DraftStep topic={topic} />}
-          {step === 2 && topic && <ShapeStep topic={topic} />}
+          {step === 2 && topic && <ShapeStep topic={topic} onContinue={() => setStep(3)} />}
+          {step === 3 && topic && <ConfirmStep topic={topic} />}
         </motion.div>
       </AnimatePresence>
     </div>
@@ -332,14 +349,311 @@ function ConceptsLine({ outcome: o }: { outcome: TopicView["outcomes"][number] }
   );
 }
 
+const TARGETS: { tier: string; plain: string }[] = [
+  { tier: "remember", plain: "recall it" },
+  { tier: "understand", plain: "explain it" },
+  { tier: "apply", plain: "use it" },
+  { tier: "analyze", plain: "work out why" },
+  { tier: "evaluate", plain: "judge and recommend" },
+  { tier: "create", plain: "design it" },
+];
+const MAX_CONCEPTS = 7;
+
+type ShapedOutcome = {
+  key: string;
+  id?: string;
+  statement: string;
+  target: string;
+  reason: string;
+  concepts: string[];
+};
+
+let keys = 0;
+const nextKey = () => `k${++keys}`;
+
+// The draft as an editor: every change shows at once and saves in the
+// background (the whole draft each time). Continue needs every outcome to
+// have a concept.
+function ShapeStep({ topic, onContinue }: { topic: TopicView; onContinue: () => void }) {
+  const [outcomes, setOutcomes] = useState<ShapedOutcome[]>(() =>
+    topic.outcomes.map((o) => ({
+      key: nextKey(),
+      id: o.id,
+      statement: o.statement,
+      target: o.target,
+      reason: o.reason,
+      concepts: o.concepts.map((c) => c.statement),
+    })),
+  );
+  const [saving, setSaving] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [error, setError] = useState<string | null>(null);
+  // What was last saved: only a real change saves (and says "Saved").
+  const lastSaved = useRef(JSON.stringify(outcomes));
+
+  const save = useCallback(
+    async (list: ShapedOutcome[]) => {
+      setSaving("saving");
+      try {
+        await call({
+          type: "save_draft",
+          topic_id: topic.id,
+          draft: {
+            outcomes: list.map((o) => ({
+              id: o.id,
+              statement: o.statement,
+              target: o.target,
+              reason: o.reason,
+              concepts: o.concepts.filter((c) => c.trim()),
+            })),
+          },
+        });
+        setSaving("saved");
+        setError(null);
+        return true;
+      } catch (e) {
+        setSaving("error");
+        setError((e as Error).message);
+        return false;
+      }
+    },
+    [topic.id],
+  );
+
+  // Save a moment after the last change.
+  useEffect(() => {
+    const now = JSON.stringify(outcomes);
+    if (now === lastSaved.current) return;
+    const t = setTimeout(() => {
+      save(outcomes).then((ok) => {
+        if (ok) lastSaved.current = now;
+      });
+    }, 600);
+    return () => clearTimeout(t);
+  }, [outcomes, save]);
+
+  const edit = (key: string, change: Partial<ShapedOutcome>) =>
+    setOutcomes((list) => list.map((o) => (o.key === key ? { ...o, ...change } : o)));
+  const move = (key: string, by: number) =>
+    setOutcomes((list) => {
+      const i = list.findIndex((o) => o.key === key);
+      const j = i + by;
+      if (i < 0 || j < 0 || j >= list.length) return list;
+      const next = [...list];
+      [next[i], next[j]] = [next[j] as ShapedOutcome, next[i] as ShapedOutcome];
+      return next;
+    });
+  const remove = (key: string) => setOutcomes((list) => list.filter((o) => o.key !== key));
+  const add = () =>
+    setOutcomes((list) => [
+      ...list,
+      { key: nextKey(), statement: "", target: "understand", reason: "", concepts: [""] },
+    ]);
+
+  const missing = outcomes.findIndex((o) => !o.statement.trim() || !o.concepts.some((c) => c.trim()));
+  const ready = outcomes.length > 0 && missing === -1;
+
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="flex items-start gap-3">
+        <div className="flex flex-1 flex-col gap-0.5">
+          <h2 className="text-base font-semibold text-ink">Shape it</h2>
+          <p className="text-sm text-ink-3">
+            Reword, reorder, change a target, add or remove concepts. Nothing is written until you confirm.
+          </p>
+        </div>
+        <AnimatePresence mode="wait" initial={false}>
+          <motion.span
+            key={saving}
+            variants={rise}
+            {...presence}
+            className="shrink-0 pt-1 text-xs text-ink-4"
+            aria-live="polite"
+          >
+            {saving === "saving" ? "Saving…" : saving === "saved" ? "Saved" : saving === "error" ? "" : ""}
+          </motion.span>
+        </AnimatePresence>
+      </div>
+
+      <ol className="flex flex-col gap-3">
+        <AnimatePresence initial={false}>
+          {outcomes.map((o, i) => (
+            <motion.li
+              key={o.key}
+              layout
+              variants={rise}
+              {...presence}
+              className="flex gap-3 rounded-lg border border-hairline bg-canvas p-3"
+            >
+              <div className="flex flex-col items-center gap-1 pt-1">
+                <span className="text-sm tabular-nums text-ink-4">{i + 1}</span>
+                <button
+                  type="button"
+                  aria-label={`Move outcome ${i + 1} up`}
+                  disabled={i === 0}
+                  onClick={() => move(o.key, -1)}
+                  className="rounded p-0.5 text-ink-4 transition-colors hover:bg-raised hover:text-ink disabled:opacity-30"
+                >
+                  <ChevronUp size={14} aria-hidden />
+                </button>
+                <button
+                  type="button"
+                  aria-label={`Move outcome ${i + 1} down`}
+                  disabled={i === outcomes.length - 1}
+                  onClick={() => move(o.key, 1)}
+                  className="rounded p-0.5 text-ink-4 transition-colors hover:bg-raised hover:text-ink disabled:opacity-30"
+                >
+                  <ChevronDown size={14} aria-hidden />
+                </button>
+              </div>
+              <div className="flex min-w-0 flex-1 flex-col gap-2">
+                <div className="flex items-start gap-2">
+                  <textarea
+                    aria-label={`Outcome ${i + 1}`}
+                    rows={2}
+                    value={o.statement}
+                    placeholder="What you'll be able to do, starting with a verb"
+                    onChange={(e) => edit(o.key, { statement: e.target.value })}
+                    className="min-h-12 flex-1 resize-none rounded-md border border-transparent bg-transparent px-2 py-1 text-sm text-ink outline-none transition-colors placeholder:text-ink-4 hover:border-hairline focus:border-hairline-strong focus:ring-2 focus:ring-accent/30"
+                  />
+                  <button
+                    type="button"
+                    aria-label={`Remove outcome ${i + 1}`}
+                    onClick={() => remove(o.key)}
+                    className="rounded p-1 text-ink-4 transition-colors hover:bg-raised hover:text-danger"
+                  >
+                    <Trash2 size={14} aria-hidden />
+                  </button>
+                </div>
+                <label className="flex items-center gap-2 px-2 text-xs text-ink-3">
+                  Target
+                  <select
+                    value={o.target}
+                    onChange={(e) => edit(o.key, { target: e.target.value })}
+                    className="rounded-md border border-hairline-strong bg-canvas px-2 py-1 text-xs text-ink outline-none focus:ring-2 focus:ring-accent/30"
+                  >
+                    {TARGETS.map((t) => (
+                      <option key={t.tier} value={t.tier}>
+                        {t.plain}
+                      </option>
+                    ))}
+                  </select>
+                  {o.reason && <span className="truncate text-ink-4">{o.reason}</span>}
+                </label>
+                <ConceptsEditor index={i} concepts={o.concepts} onChange={(concepts) => edit(o.key, { concepts })} />
+              </div>
+            </motion.li>
+          ))}
+        </AnimatePresence>
+      </ol>
+
+      <button
+        type="button"
+        onClick={add}
+        className="flex w-fit items-center gap-1.5 rounded-md px-2 py-1 text-sm text-accent transition-colors hover:bg-accent/10"
+      >
+        <Plus size={14} aria-hidden /> Add an outcome
+      </button>
+
+      <AnimatePresence>
+        {error && (
+          <motion.p
+            key="error"
+            variants={rise}
+            {...presence}
+            role="alert"
+            className="flex items-start gap-2 text-sm text-danger"
+          >
+            <CircleAlert size={14} className="mt-0.5 shrink-0" aria-hidden />
+            <span>Couldn't save: {error}</span>
+          </motion.p>
+        )}
+      </AnimatePresence>
+
+      <div className="flex items-center gap-3">
+        <span className="flex-1 text-xs text-ink-4">
+          {outcomes.length === 0
+            ? "Add at least one outcome."
+            : missing >= 0
+              ? `Outcome ${missing + 1} needs wording and at least one concept.`
+              : ""}
+        </span>
+        <button
+          type="button"
+          disabled={!ready || saving === "saving"}
+          onClick={async () => {
+            if (await save(outcomes)) onContinue();
+          }}
+          className="flex items-center gap-1.5 rounded-md bg-accent px-3.5 py-1.5 text-sm font-medium text-canvas transition-opacity hover:opacity-90 disabled:opacity-50"
+        >
+          Continue <ArrowRight size={14} aria-hidden />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function ConceptsEditor({
+  index,
+  concepts,
+  onChange,
+}: {
+  index: number;
+  concepts: string[];
+  onChange: (c: string[]) => void;
+}) {
+  const set = (j: number, value: string) => onChange(concepts.map((c, k) => (k === j ? value : c)));
+  return (
+    <div className="flex flex-col gap-1 border-l border-hairline-strong pl-3 ml-2">
+      <ul className="flex flex-col gap-1">
+        <AnimatePresence initial={false}>
+          {concepts.map((c, j) => (
+            <motion.li
+              // biome-ignore lint/suspicious/noArrayIndexKey: concepts are edited in place by position
+              key={j}
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: "auto" }}
+              exit={{ opacity: 0, height: 0 }}
+              className="group flex items-center gap-2"
+            >
+              <Circle size={9} className="shrink-0 text-ink-4" aria-hidden />
+              <input
+                aria-label={`Outcome ${index + 1}, concept ${j + 1}`}
+                value={c}
+                placeholder="An idea or fact, as you'd want it understood"
+                onChange={(e) => set(j, e.target.value)}
+                className="flex-1 rounded border border-transparent bg-transparent px-1.5 py-0.5 text-xs text-ink-2 outline-none transition-colors placeholder:text-ink-4 hover:border-hairline focus:border-hairline-strong focus:ring-2 focus:ring-accent/30"
+              />
+              <button
+                type="button"
+                aria-label={`Remove concept ${j + 1}`}
+                onClick={() => onChange(concepts.filter((_, k) => k !== j))}
+                className="rounded p-0.5 text-ink-4 opacity-0 transition-opacity hover:text-danger focus:opacity-100 group-hover:opacity-100"
+              >
+                <X size={12} aria-hidden />
+              </button>
+            </motion.li>
+          ))}
+        </AnimatePresence>
+      </ul>
+      {concepts.length < MAX_CONCEPTS && (
+        <button
+          type="button"
+          onClick={() => onChange([...concepts, ""])}
+          className="flex w-fit items-center gap-1 rounded px-1.5 py-0.5 text-xs text-ink-3 transition-colors hover:text-accent"
+        >
+          <Plus size={12} aria-hidden /> Add a concept
+        </button>
+      )}
+    </div>
+  );
+}
+
 // Placeholder until the next slice.
-function ShapeStep({ topic }: { topic: TopicView }) {
+function ConfirmStep({ topic }: { topic: TopicView }) {
   return (
     <div className="flex flex-col gap-2">
-      <h2 className="text-base font-semibold text-ink">Shape it</h2>
-      <p className="text-sm text-ink-3">
-        {topic.outcomes.length} outcomes drafted. Editing them comes in the next slice.
-      </p>
+      <h2 className="text-base font-semibold text-ink">Confirm</h2>
+      <p className="text-sm text-ink-3">{topic.outcomes.length} outcomes. Confirming comes in the next slice.</p>
     </div>
   );
 }
