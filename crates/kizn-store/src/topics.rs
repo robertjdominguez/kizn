@@ -63,6 +63,21 @@ pub struct ItemRow {
     pub created_at: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AttemptRow {
+    pub id: String,
+    pub topic_id: String,
+    pub outcome_id: String,
+    pub item_id: String,
+    /// The stored options' indices, in the order they were shown.
+    pub order: Vec<usize>,
+    /// Index into the stored options.
+    pub chosen: usize,
+    pub correct: bool,
+    pub at: String,
+    pub disputed_at: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct BatchCounts {
     pub asked: i64,
@@ -317,6 +332,54 @@ impl Store {
             "SELECT outcome_id, count(*) FROM items WHERE topic_id = ?1 AND status = 'active' GROUP BY outcome_id",
         )?;
         Ok(stmt.query_map([topic_id], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?)
+    }
+
+    pub fn item(&self, id: &str) -> Result<Option<ItemRow>> {
+        let conn = self.conn.lock().unwrap();
+        Ok(conn.query_row(&format!("SELECT {ITEM_COLS} FROM items WHERE id = ?1"), [id], item).optional()?)
+    }
+
+    pub fn insert_attempt(&self, a: &AttemptRow) -> Result<()> {
+        self.conn.lock().unwrap().execute(
+            "INSERT INTO attempts (id, topic_id, outcome_id, item_id, order_json, chosen, correct, at, disputed_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                a.id,
+                a.topic_id,
+                a.outcome_id,
+                a.item_id,
+                serde_json::to_string(&a.order).expect("an order serialises"),
+                a.chosen as i64,
+                a.correct as i64,
+                a.at,
+                a.disputed_at
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Every answer, oldest first; or one topic's.
+    pub fn attempts(&self, topic_id: Option<&str>) -> Result<Vec<AttemptRow>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, topic_id, outcome_id, item_id, order_json, chosen, correct, at, disputed_at FROM attempts
+             WHERE ?1 IS NULL OR topic_id = ?1 ORDER BY at, id",
+        )?;
+        let rows = stmt.query_map([topic_id], |r| {
+            let order: String = r.get(4)?;
+            Ok(AttemptRow {
+                id: r.get(0)?,
+                topic_id: r.get(1)?,
+                outcome_id: r.get(2)?,
+                item_id: r.get(3)?,
+                order: serde_json::from_str(&order).unwrap_or_default(),
+                chosen: r.get::<_, i64>(5)? as usize,
+                correct: r.get::<_, i64>(6)? != 0,
+                at: r.get(7)?,
+                disputed_at: r.get(8)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
     pub fn start_batch(&self, id: &str, outcome_id: &str, provider: &str, now: &str) -> Result<()> {
