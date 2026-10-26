@@ -1,4 +1,5 @@
 import {
+  ArrowLeft,
   ArrowRight,
   ChevronDown,
   ChevronUp,
@@ -22,7 +23,7 @@ import { call, type TopicView } from "../rpc";
 
 // Starting a topic, one card per step under the progress line: Goal → Draft
 // → Shape → Confirm, then the topic page. The author model drafts; the
-// learner decides. Built in small reviewed steps: Goal, Draft, then Shape.
+// learner decides. Built in small reviewed steps: Goal, Draft, Shape, Confirm.
 
 const STEPS: ProgressStep[] = [
   { label: "Goal", icon: Target },
@@ -86,7 +87,7 @@ export function Setup({ topicId }: { topicId?: string }) {
           {step === 0 && <GoalStep />}
           {step === 1 && <DraftStep topic={topic} />}
           {step === 2 && topic && <ShapeStep topic={topic} onContinue={() => setStep(3)} />}
-          {step === 3 && topic && <ConfirmStep topic={topic} />}
+          {step === 3 && topic && <ConfirmStep topic={topic} onBack={() => setStep(2)} />}
         </motion.div>
       </AnimatePresence>
     </div>
@@ -648,12 +649,85 @@ function ConceptsEditor({
   );
 }
 
-// Placeholder until the next slice.
-function ConfirmStep({ topic }: { topic: TopicView }) {
+// A last look before kizn starts writing practice: confirming locks the
+// topic (it can't be edited after) and lands on the topic page.
+function ConfirmStep({ topic, onBack }: { topic: TopicView; onBack: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const concepts = topic.outcomes.reduce((n, o) => n + o.concepts.length, 0);
+  const confirm = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await call({ type: "confirm_topic", topic_id: topic.id });
+      window.location.hash = `#/topic/${encodeURIComponent(topic.id)}`;
+    } catch (e) {
+      setError((e as Error).message);
+      setBusy(false);
+    }
+  };
   return (
-    <div className="flex flex-col gap-2">
-      <h2 className="text-base font-semibold text-ink">Confirm</h2>
-      <p className="text-sm text-ink-3">{topic.outcomes.length} outcomes. Confirming comes in the next slice.</p>
+    <div className="flex flex-col gap-4">
+      <div className="flex flex-col gap-0.5">
+        <h2 className="text-base font-semibold text-ink">Ready to prepare your practice?</h2>
+        <p className="text-sm text-ink-3">
+          kizn writes and checks practice questions for each outcome in the background. You can close it: Today will say
+          when they're ready. Once confirmed, the outcomes can't be changed.
+        </p>
+      </div>
+      <div className="rounded-lg border border-hairline bg-canvas px-4 py-3">
+        <p className="text-sm font-medium text-ink">{topic.title}</p>
+        <ol className="mt-2 flex flex-col gap-1.5">
+          {topic.outcomes.map((o, i) => (
+            <motion.li
+              key={o.id}
+              initial={{ opacity: 0, y: 4 }}
+              animate={{ opacity: 1, y: 0, transition: { delay: i * 0.05, duration: 0.2, ease: EASE } }}
+              className="flex gap-2 text-sm"
+            >
+              <span className="w-4 shrink-0 tabular-nums text-ink-4">{o.ord}</span>
+              <span className="flex-1 text-ink-2">{o.statement}</span>
+            </motion.li>
+          ))}
+        </ol>
+        <p className="mt-3 border-t border-hairline pt-2 text-xs text-ink-3">
+          {topic.outcomes.length} outcomes · {concepts} concepts · about {topic.expected} practice questions to prepare
+        </p>
+      </div>
+      <AnimatePresence>
+        {error && (
+          <motion.p
+            key="error"
+            variants={rise}
+            {...presence}
+            role="alert"
+            className="flex items-start gap-2 text-sm text-danger"
+          >
+            <CircleAlert size={14} className="mt-0.5 shrink-0" aria-hidden />
+            <span>{error}</span>
+          </motion.p>
+        )}
+      </AnimatePresence>
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={onBack}
+          className="flex items-center gap-1 rounded-md px-2 py-1.5 text-sm text-ink-3 hover:bg-raised hover:text-ink"
+        >
+          <ArrowLeft size={14} aria-hidden /> Back
+        </button>
+        <span className="flex-1" />
+        <button
+          type="button"
+          onClick={confirm}
+          disabled={busy}
+          className="flex items-center gap-1.5 rounded-md bg-accent px-3.5 py-1.5 text-sm font-medium text-canvas transition-opacity hover:opacity-90 disabled:opacity-50"
+        >
+          {busy ? <LoaderCircle size={14} className="animate-spin" aria-hidden /> : null}
+          {busy ? "Confirming…" : "Confirm"}
+          {!busy && <ArrowRight size={14} aria-hidden />}
+        </button>
+      </div>
     </div>
   );
 }

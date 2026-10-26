@@ -304,10 +304,10 @@ function SlotBar({ slots, target }: { slots: SlotView[]; target: string }) {
               <span
                 // biome-ignore lint/suspicious/noArrayIndexKey: cells are positional
                 key={j}
-                className="h-1.5 w-2.5 overflow-hidden rounded-full bg-raised"
+                className="h-1.5 w-2.5 overflow-hidden rounded-xs bg-raised"
               >
                 <motion.span
-                  className="block h-full rounded-full bg-accent"
+                  className="block h-full rounded-xs bg-accent"
                   initial={false}
                   animate={{ width: j < slot.have ? "100%" : "0%" }}
                   transition={{ duration: 0.3, ease: EASE, delay: j * 0.03 }}

@@ -75,9 +75,9 @@ export function Progress({ steps, index }: { steps: ProgressStep[]; index: numbe
                 </motion.span>
               </AnimatePresence>
             </span>
-            <span className="h-1.5 overflow-hidden rounded-full bg-raised">
+            <span className="h-1.5 overflow-hidden rounded-xs bg-raised">
               <motion.span
-                className="block h-full rounded-full bg-accent"
+                className="block h-full rounded-xs bg-accent"
                 initial={false}
                 animate={{ width: done ? "100%" : "0%" }}
                 transition={{ duration: FILL_SECONDS, ease: EASE }}
