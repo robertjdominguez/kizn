@@ -24,6 +24,7 @@ const REPLY = {
   assign_role: "settings",
   start_topic: "topic",
   stop_drafting: "topic",
+  resume_drafting: "topic",
   save_draft: "topic",
   confirm_topic: "topic",
   get_topic: "topic",

@@ -9,6 +9,7 @@ import {
   LoaderCircle,
   PencilRuler,
   Plus,
+  RotateCw,
   Sparkles,
   Target,
   Trash2,
@@ -18,6 +19,7 @@ import { AnimatePresence, motion } from "motion/react";
 import { type FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { Progress, type ProgressStep } from "../components/Progress";
 import { subscribe } from "../events";
+import { settingsCanFix } from "../fixable";
 import { EASE, presence, rise } from "../motion";
 import { call, type TopicView } from "../rpc";
 
@@ -260,21 +262,36 @@ function DraftStep({ topic }: { topic: TopicView | null }) {
       </ol>
       <AnimatePresence>
         {failed && topic?.draft_error && (
-          <motion.p
+          <motion.div
             key="failed"
             variants={rise}
             {...presence}
             role="alert"
-            className="flex items-start gap-2 rounded-lg border border-warn/30 bg-warn/5 px-3 py-2.5 text-sm text-ink-2"
+            className="flex flex-col gap-2 rounded-lg border border-warn/30 bg-warn/5 px-3 py-2.5 text-sm"
           >
-            <CircleAlert size={14} className="mt-0.5 shrink-0 text-warn" aria-hidden />
-            <span>
-              {topic.draft_error}{" "}
-              <a href="#/settings" className="text-accent underline">
-                Settings
-              </a>
-            </span>
-          </motion.p>
+            <p className="flex items-start gap-2 text-ink-2">
+              <CircleAlert size={14} className="mt-0.5 shrink-0 text-warn" aria-hidden />
+              <span>
+                {topic.draft_error.charAt(0).toUpperCase()}
+                {topic.draft_error.slice(1)}.
+              </span>
+            </p>
+            <div className="flex items-center gap-2 pl-6">
+              <button
+                type="button"
+                onClick={() => call({ type: "resume_drafting", topic_id: topic.id }).catch(() => undefined)}
+                className="flex items-center gap-1.5 rounded-md bg-warn/15 px-2.5 py-1 text-xs font-medium text-warn transition-colors hover:bg-warn/25"
+              >
+                <RotateCw size={12} aria-hidden /> Try again
+              </button>
+              {settingsCanFix(topic.draft_error) && (
+                <a href="#/settings" className="rounded-md px-2 py-1 text-xs text-ink-3 hover:bg-raised hover:text-ink">
+                  Settings
+                </a>
+              )}
+              <span className="text-xs text-ink-4">It carries on from where it stopped.</span>
+            </div>
+          </motion.div>
         )}
       </AnimatePresence>
       {!failed && (

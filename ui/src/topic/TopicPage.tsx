@@ -13,6 +13,7 @@ import { useCallback, useEffect, useId, useState } from "react";
 import type { OutcomeView } from "../bindings/OutcomeView";
 import type { SlotView } from "../bindings/SlotView";
 import { subscribe } from "../events";
+import { settingsCanFix } from "../fixable";
 import { EASE, presence, rise } from "../motion";
 import { call, type TopicView } from "../rpc";
 
@@ -359,12 +360,14 @@ function FailurePanel({ outcome: o }: { outcome: OutcomeView }) {
         >
           <RotateCw size={12} className={busy ? "animate-spin" : ""} aria-hidden /> Try now
         </button>
-        <a
-          href="#/settings"
-          className="rounded-md px-2 py-1 text-ink-3 transition-colors hover:bg-raised hover:text-ink"
-        >
-          Settings
-        </a>
+        {settingsCanFix(reason) && (
+          <a
+            href="#/settings"
+            className="rounded-md px-2 py-1 text-ink-3 transition-colors hover:bg-raised hover:text-ink"
+          >
+            Settings
+          </a>
+        )}
       </div>
     </motion.div>
   );
