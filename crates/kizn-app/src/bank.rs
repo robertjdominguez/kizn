@@ -39,6 +39,7 @@ Rules for every scored item (recall, apply, target):
 - Every option has \"why\": one line on why it's right, or what's wrong with it.
 - Every wrong option has \"misconception\": the mistaken belief it stands for, in one line.
 - Every wrong option has \"foundation\": if its misconception is really a gap in a more basic topic (one of the topics listed, or another more basic one), name that topic; otherwise \"none\".
+- Keep each stem under 1,200 characters and each option under 250 (a line, not a paragraph): longer ones are refused.
 - Options alike in length, grammar and style. No \"all of the above\", \"none of the above\", \"both A and C\". Don't repeat the correct option's words in the stem.
 - Scenarios (apply, target) use concrete details; numbers and names are made up and the stem says so.
 - \"source\": what you took it from, or \"\" with \"model_knowledge\": true.
@@ -92,6 +93,9 @@ impl Ctx {
                 let due = match o.bank_state.as_str() {
                     "waiting" | "writing" => true,
                     "failed" => o.retry_at.as_deref().is_some_and(|r| r <= now.as_str()),
+                    // Ready, but short of what it should hold (left mid-write by
+                    // an older kizn, or used up by practice): top it up.
+                    "ready" => self.short_of_bank(&o)?,
                     _ => false,
                 };
                 if due {
@@ -100,6 +104,21 @@ impl Ctx {
             }
         }
         Ok(None)
+    }
+
+    fn short_of_bank(&self, o: &OutcomeRow) -> Result<bool, AppError> {
+        let target = Tier::parse(&o.target_tier).unwrap_or(Tier::Understand);
+        let concept_ids: Vec<String> = self.store.concepts(&o.id)?.into_iter().map(|c| c.id).collect();
+        let active = self.store.items(&o.id, Some("active"))?;
+        let banked: Vec<BankedItem> = active
+            .iter()
+            .map(|i| BankedItem {
+                id: &i.id,
+                kind: ItemKind::parse(&i.kind).unwrap_or(ItemKind::Recall),
+                concept_ids: &i.concept_ids,
+            })
+            .collect();
+        Ok(!bank_needs(target, &concept_ids, &banked, &HashSet::new()).is_empty())
     }
 
     fn fail(&self, o: &OutcomeRow, why: &str, retry_in: chrono::Duration) {
