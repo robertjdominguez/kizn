@@ -142,8 +142,12 @@ function TopicCard({ topic: t }: { topic: TopicSummary }) {
 const status = (t: TopicSummary) => (t.status === "draft" ? "draft" : t.preparing ? "preparing" : "ready");
 
 /** An always-visible anchor (icon and a word); its detail grows in beside it
- *  while the status text is hovered, or the card has keyboard focus. CSS
- *  only: a grid column that animates from zero width to its content. */
+ *  while the status is hovered, or the card has keyboard focus. CSS only: a
+ *  grid column that animates from zero width to its content.
+ *
+ *  Hover intent: the hit area is padded (with matching negative margins, so
+ *  nothing moves) and the detail opens after 75 ms but closes only after
+ *  200 ms, so brushing past or slipping off an edge doesn't make it flash. */
 function TopicStatus({ topic: t }: { topic: TopicSummary }) {
   const s = status(t);
   const { icon, word, detail, spoken, tone } =
@@ -171,12 +175,12 @@ function TopicStatus({ topic: t }: { topic: TopicSummary }) {
             tone: "text-success",
           };
   return (
-    <span className={`group/status flex items-center gap-1.5 ${tone}`}>
+    <span className={`group/status -mx-2 -my-2.5 flex items-center gap-1.5 px-2 py-2.5 ${tone}`}>
       {icon}
       <span aria-hidden>{word}</span>
       <span
         aria-hidden
-        className="grid grid-cols-[0fr] opacity-0 transition-[grid-template-columns,opacity] duration-200 ease-out group-hover/status:grid-cols-[1fr] group-hover/status:opacity-100 group-focus-visible:grid-cols-[1fr] group-focus-visible:opacity-100"
+        className="grid grid-cols-[0fr] opacity-0 transition-[grid-template-columns,opacity] delay-200 duration-200 ease-out group-hover/status:grid-cols-[1fr] group-hover/status:opacity-100 group-hover/status:delay-75 group-focus-visible:grid-cols-[1fr] group-focus-visible:opacity-100 group-focus-visible:delay-0"
       >
         <span className="overflow-hidden whitespace-nowrap tabular-nums">· {detail}</span>
       </span>
