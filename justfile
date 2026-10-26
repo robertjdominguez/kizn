@@ -240,25 +240,43 @@ release-sums dir="dist":
 stage-release dir version="0.1.0":
     cargo run -q -p kizn-install-tests --bin kizn-stage -- "{{ dir }}" "{{ version }}"
 
-# Cut a release: set the version, commit, tag v<version>, and (after asking) push; CI drafts the GitHub release
-release version:
+# Releasing, step 1: a PR that sets the version (main is protected). Merge it, then `just release <version>`
+release-pr version:
     #!/usr/bin/env bash
     set -euo pipefail
     v="{{ version }}"; v="${v#v}"
     [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]] || { echo "not a version: $v (want X.Y.Z or X.Y.Z-rc.N)"; exit 2; }
-    [[ "$(git branch --show-current)" == main ]] || { echo "release from main"; exit 1; }
     [[ -z "$(git status --porcelain)" ]] || { echo "the working tree isn't clean"; exit 1; }
-    git rev-parse -q --verify "refs/tags/v$v" >/dev/null && { echo "v$v is already tagged"; exit 1; }
+    git fetch -q origin main
+    git switch -q -c "release-v$v" origin/main
     sed -i.bak -E '/^\[workspace\.package\]/,/^\[/ s/^version = ".*"/version = "'"$v"'"/' Cargo.toml && rm Cargo.toml.bak
     sed -i.bak -E 's/^  "version": ".*",$/  "version": "'"$v"'",/' src-tauri/tauri.conf.json && rm src-tauri/tauri.conf.json.bak
     cargo update -q --workspace
     git add Cargo.toml Cargo.lock src-tauri/tauri.conf.json
     git commit -q -s -m "Release v$v"
-    git tag -a "v$v" -m "kizn v$v"
-    echo "Committed and tagged v$v."
-    read -r -p "Push main and v$v to origin (CI builds and drafts the release)? [y/N] " a
-    if [[ "$a" == y || "$a" == Y ]]; then git push origin main "v$v"; else echo "Not pushed. Later: git push origin main v$v"; fi
+    echo "Committed v$v on release-v$v."
+    read -r -p "Push release-v$v and open its PR? [y/N] " a
+    [[ "$a" == y || "$a" == Y ]] || { echo "Not pushed. Later: git push -u origin release-v$v && gh pr create"; exit 0; }
+    git push -q -u origin "release-v$v"
+    gh pr create --base main --head "release-v$v" --title "Release v$v" --body "$(printf '%s\n\n%s' \
+      "**Before:** kizn's version was the previous release's." \
+      "**After:** kizn is versioned $v. Once this merges, \`just release $v\` tags it and CI drafts the release.")"
 
+# Releasing, step 2 (after the release PR merges): tag main's merge commit; CI builds and drafts the release
+release version:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    v="{{ version }}"; v="${v#v}"
+    git fetch -q --tags origin main
+    git rev-parse -q --verify "refs/tags/v$v" >/dev/null && { echo "v$v is already tagged"; exit 1; }
+    have=$(git show origin/main:src-tauri/tauri.conf.json | sed -n 's/^  "version": "\(.*\)",$/\1/p')
+    [[ "$have" == "$v" ]] || { echo "main is at $have, not $v: merge the release PR first (just release-pr $v)"; exit 1; }
+    commit=$(git rev-parse --short origin/main)
+    read -r -p "Tag $commit (origin/main) as v$v and push the tag (CI drafts the release)? [y/N] " a
+    [[ "$a" == y || "$a" == Y ]] || { echo "Not tagged."; exit 0; }
+    git tag -a "v$v" -m "kizn v$v" origin/main
+    git push -q origin "v$v"
+    echo "Pushed v$v: the release workflow builds and drafts it."
 # Load a named fixture (tests/fixtures/<name>) into the dev data dir; `just seed` lists them
 seed fixture="":
     #!/usr/bin/env bash
