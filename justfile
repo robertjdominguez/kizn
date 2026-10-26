@@ -282,10 +282,10 @@ seed fixture="":
     fi
     echo "seeded {{ fixture }}: $(head -1 "$dir/README" 2>/dev/null)"
 
-# Read-only views of the dev data (db; bank, progress, attempts in later phases)
-inspect what:
+# Read-only views of the dev data: `db`, or `bank [topic]` (progress and attempts come later)
+inspect what topic="":
     cargo build -q -p kizn-bridge
-    KIZN_DATA_DIR="{{ dev_dir }}" KIZN_CONFIG_DIR="{{ dev_dir }}" "{{ bridge }}" inspect {{ what }}
+    KIZN_DATA_DIR="{{ dev_dir }}" KIZN_CONFIG_DIR="{{ dev_dir }}" "{{ bridge }}" inspect {{ what }} {{ topic }}
 
 # Wipe the dev data directory (./.kizn-dev)
 db-reset yes="":

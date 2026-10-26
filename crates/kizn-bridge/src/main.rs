@@ -15,6 +15,7 @@
 //! Dev subcommands, for the justfile:
 //!   kizn-bridge paths        the data and config directories, as resolved
 //!   kizn-bridge inspect db   read-only: schema version, tables, row counts
+//!   kizn-bridge inspect bank [topic]   questions by outcome and status, refusal reasons
 //!   kizn-bridge seed <file>  migrate the dev database, then run a fixture's SQL
 
 use std::convert::Infallible;
@@ -90,8 +91,9 @@ fn paths() {
     println!("config: {}", p.config_dir.display());
 }
 
-fn inspect(what: Option<&str>) -> Result<(), String> {
+fn inspect(what: Option<&str>, topic: Option<&str>) -> Result<(), String> {
     match what {
+        Some("bank") => inspect_bank(topic),
         Some("db") => {
             let path = Paths::from_env().data_dir.join(kizn_app::DB_FILE);
             if !path.exists() {
@@ -105,8 +107,77 @@ fn inspect(what: Option<&str>) -> Result<(), String> {
             }
             Ok(())
         }
-        other => Err(format!("inspect what? {other:?}: db (bank, progress and attempts come with later phases)")),
+        other => Err(format!("inspect what? {other:?}: db or bank (progress and attempts come with later phases)")),
     }
+}
+
+/// The bank as it stands: per outcome, active questions by kind against what
+/// a full bank holds, refusals grouped by reason, and the writing runs.
+fn inspect_bank(topic: Option<&str>) -> Result<(), String> {
+    let path = Paths::from_env().data_dir.join(kizn_app::DB_FILE);
+    if !path.exists() {
+        return Err(format!("no database at {} yet", path.display()));
+    }
+    let store = kizn_store::Store::open(&path).map_err(|e| e.to_string())?;
+    let topics: Vec<_> = store
+        .all_topics()
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .filter(|t| topic.is_none_or(|q| t.id.starts_with(q) || t.title.to_lowercase().contains(&q.to_lowercase())))
+        .collect();
+    if topics.is_empty() {
+        return Err(match topic {
+            Some(q) => format!("no topic matches {q:?}"),
+            None => "no topics yet".into(),
+        });
+    }
+    for t in topics {
+        println!("{}  ({}, {})", t.title, t.id, t.status);
+        for o in store.outcomes(&t.id).map_err(|e| e.to_string())? {
+            let tier = kizn_core::Tier::parse(&o.target_tier).unwrap_or(kizn_core::Tier::Understand);
+            let concepts = store.concepts(&o.id).map_err(|e| e.to_string())?;
+            let items = store.items(&o.id, None).map_err(|e| e.to_string())?;
+            let count = |status: &str| items.iter().filter(|i| i.status == status).count();
+            let full = kizn_core::bank::bank_size(tier, concepts.len());
+            println!("  {}. {}", o.ord, o.statement);
+            println!(
+                "     {}  {}/{} active · {} refused · {} retired{}",
+                o.bank_state,
+                count("active"),
+                full,
+                count("refused"),
+                count("retired"),
+                o.bank_error.as_deref().map(|e| format!("\n     error: {e}")).unwrap_or_default()
+            );
+            let kinds: Vec<String> = ["recall", "apply", "target", "explain"]
+                .iter()
+                .map(|k| (k, items.iter().filter(|i| i.status == "active" && i.kind == *k).count()))
+                .filter(|(_, n)| *n > 0)
+                .map(|(k, n)| format!("{k} {n}"))
+                .collect();
+            if !kinds.is_empty() {
+                println!("     active by kind: {}", kinds.join(" · "));
+            }
+            let mut reasons: Vec<(String, usize)> = vec![];
+            for i in items.iter().filter(|i| i.status == "refused") {
+                let label = i.status_reason.as_deref().unwrap_or("?").split(':').next().unwrap_or("?").to_string();
+                match reasons.iter_mut().find(|(l, _)| *l == label) {
+                    Some((_, n)) => *n += 1,
+                    None => reasons.push((label, 1)),
+                }
+            }
+            reasons.sort_by_key(|r| std::cmp::Reverse(r.1));
+            for (label, n) in reasons {
+                println!("       {n} × {label}");
+            }
+            let runs = store.batch_count(&o.id).map_err(|e| e.to_string())?;
+            if runs > 0 {
+                println!("     {runs} writing runs");
+            }
+        }
+        println!();
+    }
+    Ok(())
 }
 
 #[tokio::main]
@@ -124,7 +195,7 @@ async fn main() {
             store.execute_batch(&sql).unwrap_or_else(|e| exit(format!("{file}: {e}")));
         }
         Some("inspect") => {
-            if let Err(e) = inspect(args.get(1).map(String::as_str)) {
+            if let Err(e) = inspect(args.get(1).map(String::as_str), args.get(2).map(String::as_str)) {
                 eprintln!("kizn-bridge: {e}");
                 std::process::exit(1);
             }
