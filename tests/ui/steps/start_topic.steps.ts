@@ -83,14 +83,17 @@ Then("each outcome has a target with a reason that quotes my goal", async ({ pag
 Then("each outcome has {int} to {int} concepts", async ({ page }, min: number, max: number) => {
   const n = await outcomeFields(page).count();
   for (let i = 1; i <= n; i++) {
-    const concepts = await page.getByRole("textbox", { name: new RegExp(`^Outcome ${i}, concept \\d+$`) }).count();
+    // A concept is a one-line button until clicked, then a textbox.
+    const concepts = await page.getByRole("button", { name: new RegExp(`^Outcome ${i}, concept \\d+:`) }).count();
     expect(concepts, `outcome ${i}`).toBeGreaterThanOrEqual(min);
     expect(concepts, `outcome ${i}`).toBeLessThanOrEqual(max);
   }
 });
 
 When("I rename a concept, delete an outcome and change a target to {string}", async ({ page }, target: string) => {
+  await page.getByRole("button", { name: /^Outcome 1, concept 1:/ }).click();
   await page.getByRole("textbox", { name: "Outcome 1, concept 1" }).fill("An image is immutable layers plus config");
+  await page.keyboard.press("Enter");
   const n = await outcomeFields(page).count();
   await page.getByRole("button", { name: `Remove outcome ${n}` }).click();
   await expect(outcomeFields(page)).toHaveCount(n - 1);

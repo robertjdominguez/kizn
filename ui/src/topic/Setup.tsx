@@ -633,14 +633,8 @@ function ConceptsEditor({
               exit={{ opacity: 0, height: 0 }}
               className="group flex items-center gap-2"
             >
-              <Circle size={9} className="shrink-0 text-ink-4" aria-hidden />
-              <input
-                aria-label={`Outcome ${index + 1}, concept ${j + 1}`}
-                value={c}
-                placeholder="An idea or fact, as you'd want it understood"
-                onChange={(e) => set(j, e.target.value)}
-                className="flex-1 rounded border border-transparent bg-transparent px-1.5 py-0.5 text-xs text-ink-2 outline-none transition-colors placeholder:text-ink-4 hover:border-hairline focus:border-hairline-strong focus:ring-2 focus:ring-accent/30"
-              />
+              <Circle size={9} className="shrink-0 self-start mt-[7px] text-ink-4" aria-hidden />
+              <ConceptField label={`Outcome ${index + 1}, concept ${j + 1}`} value={c} onChange={(v) => set(j, v)} />
               <button
                 type="button"
                 aria-label={`Remove concept ${j + 1}`}
@@ -663,6 +657,68 @@ function ConceptsEditor({
         </button>
       )}
     </div>
+  );
+}
+
+// One concept: a single tidy line that previews the whole text on hover and
+// becomes a growing textarea when clicked (or on Enter). A new, empty concept
+// starts in its textarea.
+function ConceptField({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
+  const [editing, setEditing] = useState(value === "");
+  const area = useRef<HTMLTextAreaElement>(null);
+  const fit = useCallback(() => {
+    const el = area.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${el.scrollHeight}px`;
+  }, []);
+  useEffect(() => {
+    if (!editing) return;
+    fit();
+    area.current?.focus();
+    const len = area.current?.value.length ?? 0;
+    area.current?.setSelectionRange(len, len);
+  }, [editing, fit]);
+  if (editing) {
+    return (
+      <textarea
+        ref={area}
+        aria-label={label}
+        rows={1}
+        value={value}
+        placeholder="An idea or fact, as you'd want it understood"
+        onChange={(e) => {
+          onChange(e.target.value.replace(/\n/g, " "));
+          fit();
+        }}
+        onBlur={() => setEditing(false)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === "Escape") {
+            e.preventDefault();
+            e.currentTarget.blur();
+          }
+        }}
+        className="min-w-0 flex-1 resize-none overflow-hidden rounded border border-hairline-strong bg-canvas px-1.5 py-0.5 text-xs leading-relaxed text-ink outline-none placeholder:text-ink-4 focus:ring-2 focus:ring-accent/30"
+      />
+    );
+  }
+  return (
+    <span className="group/concept relative min-w-0 flex-1">
+      <button
+        type="button"
+        aria-label={`${label}: ${value}. Edit`}
+        onClick={() => setEditing(true)}
+        className="block w-full truncate rounded border border-transparent px-1.5 py-0.5 text-left text-xs text-ink-2 transition-colors hover:border-hairline focus-visible:border-hairline-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30"
+      >
+        {value}
+      </button>
+      <span
+        aria-hidden
+        className="pointer-events-none invisible absolute left-0 top-full z-10 mt-1 w-max max-w-md translate-y-1 rounded-md border border-hairline-strong bg-overlay px-2.5 py-1.5 text-xs leading-relaxed text-ink opacity-0 shadow-lg shadow-black/30 transition-[opacity,transform,visibility] delay-150 duration-150 group-hover/concept:visible group-hover/concept:translate-y-0 group-hover/concept:opacity-100 group-hover/concept:delay-300"
+      >
+        {value}
+      </span>
+    </span>
   );
 }
 
