@@ -53,6 +53,10 @@ pub enum Command {
     StopDrafting {
         topic_id: String,
     },
+    /// Carries on a draft that failed or was stopped, from where it left off.
+    ResumeDrafting {
+        topic_id: String,
+    },
     /// Replaces a draft with the learner's shaped version.
     SaveDraft {
         topic_id: String,

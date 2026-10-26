@@ -60,6 +60,11 @@ fn concepts_schema() -> Value {
 
 // ---- the model for a role ----------------------------------------------------------
 
+/// How long one drafting or writing request may take. Local models (and
+/// thinking models) can take minutes to write a batch; the connection test
+/// keeps its short limit.
+const JOB_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
+
 pub(crate) struct RoleModel {
     pub provider: String,
     pub client: Client,
@@ -81,7 +86,7 @@ impl Ctx {
         let prompted = self.store.checks()?.iter().any(|c| c.provider == name && c.check_json.contains("\"prompted\""));
         Ok(RoleModel {
             provider: name,
-            client: Client::new(endpoint, self.deps.http.clone()),
+            client: Client::new(endpoint, self.deps.http.clone()).with_timeout(JOB_TIMEOUT),
             mode: if prompted { JsonMode::Prompted } else { JsonMode::Native },
         })
     }
@@ -113,6 +118,53 @@ async fn draft(ctx: Ctx, topic: TopicRow, stop: Arc<AtomicBool>) {
 
 async fn draft_inner(ctx: &Ctx, topic: &TopicRow, stop: &AtomicBool) -> Result<(), AppError> {
     let author = ctx.role_model(Role::Author)?;
+    // Resuming: keep the outcomes already drafted and carry on with their
+    // concepts; only a draft without outcomes asks for them.
+    let existing = ctx.store.outcomes(&topic.id)?;
+    let outcomes = if existing.is_empty() { draft_outcomes(ctx, topic, &author).await? } else { existing };
+    for o in outcomes.iter().filter(|o| o.concepts_state != "done") {
+        if stop.load(Ordering::Relaxed) {
+            ctx.store.set_draft_state(&topic.id, "stopped", None)?;
+            return Ok(());
+        }
+        ctx.store.set_concepts_state(&o.id, "drafting")?;
+        ctx.changed(&topic.id);
+        let others: Vec<&str> = outcomes.iter().filter(|x| x.id != o.id).map(|x| x.statement.as_str()).collect();
+        let ask = input(&json!({
+            "title": topic.title, "goal": topic.goal, "outcome": o.statement, "tier": o.target_tier, "other_outcomes": others
+        }));
+        let reply = author.client.complete_json(DRAFT_CONCEPTS, &ask, &concepts_schema(), author.mode).await;
+        let (reply, _) = match reply {
+            Ok(r) => r,
+            Err(e) => {
+                ctx.store.set_concepts_state(&o.id, "pending")?;
+                return Err(AppError::Refused(format!("the author model couldn't draft concepts: {e}")));
+            }
+        };
+        let concepts = reply["concepts"].as_array().cloned().unwrap_or_default();
+        for (i, c) in concepts
+            .iter()
+            .filter_map(|c| c.as_str())
+            .map(str::trim)
+            .filter(|c| !c.is_empty())
+            .take(MAX_CONCEPTS)
+            .enumerate()
+        {
+            ctx.store.insert_concept(&ConceptRow {
+                id: ctx.id(),
+                outcome_id: o.id.clone(),
+                ord: i as i64 + 1,
+                statement: c.to_string(),
+            })?;
+        }
+        ctx.store.set_concepts_state(&o.id, "done")?;
+        ctx.changed(&topic.id);
+    }
+    ctx.store.set_draft_state(&topic.id, "drafted", None)?;
+    Ok(())
+}
+
+async fn draft_outcomes(ctx: &Ctx, topic: &TopicRow, author: &RoleModel) -> Result<Vec<OutcomeRow>, AppError> {
     let ask = input(&json!({"title": topic.title, "goal": topic.goal}));
     let (reply, _) = author
         .client
@@ -146,43 +198,7 @@ async fn draft_inner(ctx: &Ctx, topic: &TopicRow, stop: &AtomicBool) -> Result<(
     if outcomes.is_empty() {
         return Err(AppError::Refused("the author model's reply had no outcomes in it".into()));
     }
-    for o in &outcomes {
-        if stop.load(Ordering::Relaxed) {
-            ctx.store.set_draft_state(&topic.id, "stopped", None)?;
-            return Ok(());
-        }
-        ctx.store.set_concepts_state(&o.id, "drafting")?;
-        ctx.changed(&topic.id);
-        let others: Vec<&str> = outcomes.iter().filter(|x| x.id != o.id).map(|x| x.statement.as_str()).collect();
-        let ask = input(&json!({
-            "title": topic.title, "goal": topic.goal, "outcome": o.statement, "tier": o.target_tier, "other_outcomes": others
-        }));
-        let (reply, _) = author
-            .client
-            .complete_json(DRAFT_CONCEPTS, &ask, &concepts_schema(), author.mode)
-            .await
-            .map_err(|e| AppError::Refused(format!("the author model couldn't draft concepts: {e}")))?;
-        let concepts = reply["concepts"].as_array().cloned().unwrap_or_default();
-        for (i, c) in concepts
-            .iter()
-            .filter_map(|c| c.as_str())
-            .map(str::trim)
-            .filter(|c| !c.is_empty())
-            .take(MAX_CONCEPTS)
-            .enumerate()
-        {
-            ctx.store.insert_concept(&ConceptRow {
-                id: ctx.id(),
-                outcome_id: o.id.clone(),
-                ord: i as i64 + 1,
-                statement: c.to_string(),
-            })?;
-        }
-        ctx.store.set_concepts_state(&o.id, "done")?;
-        ctx.changed(&topic.id);
-    }
-    ctx.store.set_draft_state(&topic.id, "drafted", None)?;
-    Ok(())
+    Ok(outcomes)
 }
 
 // ---- commands ------------------------------------------------------------------------
@@ -207,6 +223,22 @@ impl App {
         self.drafting.lock().unwrap().insert(id.clone(), stop.clone());
         tokio::spawn(draft(self.ctx.clone(), topic, stop));
         self.topic_view(&id)
+    }
+
+    /// Carries on a draft that failed or was stopped, from where it left off.
+    pub(crate) fn resume_drafting(&self, topic_id: &str) -> Result<TopicView, AppError> {
+        let topic = self.draft_topic(topic_id)?;
+        if topic.draft_state == "drafting" {
+            return self.topic_view(&topic.id);
+        }
+        self.ctx.role_model(Role::Author)?;
+        self.store.set_draft_state(&topic.id, "drafting", None)?;
+        let topic = self.store.topic(&topic.id)?.expect("still there");
+        let stop = Arc::new(AtomicBool::new(false));
+        self.drafting.lock().unwrap().insert(topic.id.clone(), stop.clone());
+        tokio::spawn(draft(self.ctx.clone(), topic.clone(), stop));
+        self.ctx.changed(&topic.id);
+        self.topic_view(&topic.id)
     }
 
     pub(crate) fn stop_drafting(&self, topic_id: &str) -> Result<TopicView, AppError> {

@@ -139,6 +139,7 @@ impl App {
             Command::AssignRole { role, provider } => self.assign_role(role, provider.as_deref()).map(Reply::Settings),
             Command::StartTopic { title, goal } => self.start_topic(&title, &goal).map(Reply::Topic),
             Command::StopDrafting { topic_id } => self.stop_drafting(&topic_id).map(Reply::Topic),
+            Command::ResumeDrafting { topic_id } => self.resume_drafting(&topic_id).map(Reply::Topic),
             Command::SaveDraft { topic_id, draft } => self.save_draft(&topic_id, &draft).map(Reply::Topic),
             Command::ConfirmTopic { topic_id } => self.confirm_topic(&topic_id).map(Reply::Topic),
             Command::GetTopic { topic_id } => self.topic_view(&topic_id).map(Reply::Topic),

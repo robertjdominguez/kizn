@@ -49,3 +49,9 @@ Feature: Start a topic
     Then each outcome says the account can't run requests yet
     When I retry an outcome
     Then kizn tries writing it again straight away
+
+  @domain
+  Scenario: A draft that fails can carry on
+    Given drafting failed because the author couldn't run requests
+    When I fix the author and try again
+    Then drafting carries on and every outcome gets its concepts

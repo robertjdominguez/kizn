@@ -371,6 +371,43 @@ async fn topic_no_credit(w: &mut Kizn) {
     w.topic_from(Command::ConfirmTopic { topic_id }).await;
 }
 
+#[given("drafting failed because the author couldn't run requests")]
+async fn drafting_failed(w: &mut Kizn) {
+    w.use_for(Role::Author, "broke", Behaviour::NoCredit, true).await;
+    w.goal = Some("explain to customers why deployments behave differently".into());
+    w.topic_from(Command::StartTopic {
+        title: "Container fundamentals".into(),
+        goal: "explain to customers why deployments behave differently".into(),
+    })
+    .await;
+    let t = w.wait_for("the draft to fail", |t| t.draft_state != "drafting").await;
+    assert_eq!(t.draft_state, "failed");
+    assert!(
+        t.draft_error.as_deref().unwrap_or("").contains("the account can't run requests yet"),
+        "{:?}",
+        t.draft_error
+    );
+}
+
+#[when("I fix the author and try again")]
+async fn fix_and_retry(w: &mut Kizn) {
+    let path = w.dir().join(CONFIG_FILE);
+    let text = std::fs::read_to_string(&path).unwrap().replace("author = \"broke\"", "author = \"local\"");
+    std::fs::write(&path, text).unwrap();
+    let topic_id = w.topic_id();
+    w.topic_from(Command::ResumeDrafting { topic_id }).await;
+}
+
+#[then("drafting carries on and every outcome gets its concepts")]
+async fn drafting_carries_on(w: &mut Kizn) {
+    let t = w.wait_for("the draft to finish", |t| t.draft_state != "drafting").await;
+    assert_eq!(t.draft_state, "drafted", "{:?}", t.draft_error);
+    assert!(!t.outcomes.is_empty());
+    for o in &t.outcomes {
+        assert!(!o.concepts.is_empty(), "outcome {} has no concepts", o.ord);
+    }
+}
+
 #[when("the bank is written")]
 async fn bank_written(w: &mut Kizn) {
     w.wait_for("every outcome's bank to finish", |t| {
