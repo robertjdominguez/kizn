@@ -10,6 +10,7 @@ export type World = {
   model?: string;
   /** A port nothing listens on, for "nothing answered". */
   closedPort?: number;
+  goal?: string;
 };
 
 export const test = base.extend<{ world: World }>({
