@@ -20,8 +20,9 @@ import { type FormEvent, type ReactNode, useCallback, useEffect, useRef, useStat
 import type { CheckView } from "../bindings/CheckView";
 import type { ProviderView } from "../bindings/ProviderView";
 import { Progress } from "../components/Progress";
+import { Reveal } from "../components/Reveal";
 import { openExternal } from "../external";
-import { EASE } from "../motion";
+import { EASE, presence, rise } from "../motion";
 import { call } from "../rpc";
 import { PRESETS, type Preset, PresetIcon } from "./presets";
 
@@ -311,12 +312,14 @@ function Nav({
   );
 }
 
-function Problem({ children }: { children: ReactNode }) {
+function Problem({ when, children }: { when: unknown; children: ReactNode }) {
   return (
-    <p role="alert" className="mt-3 flex items-start gap-2 text-sm text-danger">
-      <CircleAlert size={14} className="mt-0.5 shrink-0" aria-hidden />
-      <span>{children}</span>
-    </p>
+    <Reveal when={when}>
+      <p role="alert" className="mt-3 flex items-start gap-2 text-sm text-danger">
+        <CircleAlert size={14} className="mt-0.5 shrink-0" aria-hidden />
+        <span>{children}</span>
+      </p>
+    </Reveal>
   );
 }
 
@@ -455,13 +458,11 @@ function KeyStep({
         />
         <span className="text-xs text-ink-4">Kept in your system keychain, never written to a file.</span>
       </div>
-      {error && (
-        <Problem>
-          {error.includes("refused the key")
-            ? `${preset.name} didn't accept that key. Check it was copied whole.`
-            : error}
-        </Problem>
-      )}
+      <Problem when={error}>
+        {error?.includes("refused the key")
+          ? `${preset.name} didn't accept that key. Check it was copied whole.`
+          : error}
+      </Problem>
       <Nav
         onBack={onBack}
         next="Continue"
@@ -532,21 +533,25 @@ function InstallStep({
           <ExternalButton url={preset.setupUrl} label={`Get ${preset.name}`} />
         </div>
       )}
-      <p className="mt-4 flex items-center gap-2 text-sm" aria-live="polite">
-        {found ? (
-          <>
-            <CircleCheck size={15} className="text-success" aria-hidden />{" "}
-            <span className="text-ink">{preset.name} is running.</span>
-          </>
-        ) : (
-          <>
-            <LoaderCircle size={15} className="animate-spin text-ink-3" aria-hidden />
-            <span className="text-ink-3">
-              Waiting for {preset.name} at {baseUrl.replace(/\/v1\/?$/, "")}…
-            </span>
-          </>
-        )}
-      </p>
+      <div className="mt-4 text-sm" aria-live="polite">
+        <AnimatePresence mode="wait" initial={false}>
+          <motion.p key={found ? "found" : "waiting"} variants={rise} {...presence} className="flex items-center gap-2">
+            {found ? (
+              <>
+                <CircleCheck size={15} className="text-success" aria-hidden />{" "}
+                <span className="text-ink">{preset.name} is running.</span>
+              </>
+            ) : (
+              <>
+                <LoaderCircle size={15} className="animate-spin text-ink-3" aria-hidden />
+                <span className="text-ink-3">
+                  Waiting for {preset.name} at {baseUrl.replace(/\/v1\/?$/, "")}…
+                </span>
+              </>
+            )}
+          </motion.p>
+        </AnimatePresence>
+      </div>
       <details className="mt-3 text-xs text-ink-3">
         <summary className="cursor-pointer select-none hover:text-ink">Running on another machine?</summary>
         <label className="mt-2 flex flex-col gap-1">
@@ -565,7 +570,7 @@ function InstallStep({
           </button>
         )}
         <span className="flex-1" />
-        {patience && !found && (
+        <Reveal when={patience && !found}>
           <button
             type="button"
             onClick={onContinue}
@@ -573,7 +578,7 @@ function InstallStep({
           >
             Continue anyway <ArrowRight size={14} aria-hidden />
           </button>
-        )}
+        </Reveal>
       </div>
     </div>
   );
@@ -641,7 +646,7 @@ function AddressStep({
           />
         </label>
       </div>
-      {error && <Problem>{error}</Problem>}
+      <Problem when={error}>{error}</Problem>
       <Nav
         onBack={onBack}
         next="Continue"
@@ -714,7 +719,9 @@ function ModelStep({
         <p className="text-xs text-ink-4">
           A larger model writes better practice items; a smaller one is cheaper and faster. You can change it later.
         </p>
-        {listError && <p className="text-xs text-warn">Couldn't list the models: {listError}</p>}
+        <Reveal when={listError}>
+          <p className="text-xs text-warn">Couldn't list the models: {listError}</p>
+        </Reveal>
         {preset.kind !== "custom" && (
           <details className="text-xs text-ink-3">
             <summary className="cursor-pointer select-none hover:text-ink">Advanced</summary>
@@ -730,7 +737,7 @@ function ModelStep({
           </details>
         )}
       </div>
-      {error && <Problem>{error}</Problem>}
+      <Problem when={error}>{error}</Problem>
       <Nav onBack={onBack} next="Test it" busy={busy ? "Saving…" : null} disabled={!value.trim()} />
     </form>
   );
@@ -857,10 +864,20 @@ function TestStep({
           return (
             <li key={r.label} className="flex items-center gap-3 text-sm">
               <span className="flex size-5 items-center justify-center">
-                {state === "pending" && <LoaderCircle size={15} className="animate-spin text-ink-4" aria-hidden />}
-                {state === "ok" && <CircleCheck size={16} className="text-success" aria-hidden />}
-                {state === "fail" && <CircleAlert size={16} className="text-warn" aria-hidden />}
-                {state === "skipped" && <span className="size-1.5 rounded-full bg-ink-4" aria-hidden />}
+                <AnimatePresence mode="wait" initial={false}>
+                  <motion.span
+                    key={state}
+                    initial={{ opacity: 0, scale: 0.6 }}
+                    animate={{ opacity: 1, scale: 1, transition: { duration: 0.18, ease: EASE } }}
+                    exit={{ opacity: 0, scale: 0.6, transition: { duration: 0.1 } }}
+                    className="flex"
+                  >
+                    {state === "pending" && <LoaderCircle size={15} className="animate-spin text-ink-4" aria-hidden />}
+                    {state === "ok" && <CircleCheck size={16} className="text-success" aria-hidden />}
+                    {state === "fail" && <CircleAlert size={16} className="text-warn" aria-hidden />}
+                    {state === "skipped" && <span className="size-1.5 rounded-full bg-ink-4" aria-hidden />}
+                  </motion.span>
+                </AnimatePresence>
               </span>
               <span className="w-36 text-ink">{r.label}</span>
               <span className={state === "skipped" ? "text-ink-4" : "text-ink-3"}>{visible ? r.detail : "…"}</span>
@@ -868,36 +885,38 @@ function TestStep({
           );
         })}
       </ul>
-      {error && <Problem>{error}</Problem>}
-      {settled && !canAuthor && (
-        <div className="mt-4 flex flex-col gap-2 rounded-lg border border-warn/30 bg-warn/5 px-3 py-2.5 text-sm">
-          <p className="text-ink-2">
-            {!check.reachable || outright
-              ? sentence(check.summary)
-              : `kizn needs a model that can return structured output to write your practice items, and ${model} can't.`}
-          </p>
-          {check.reachable && !outright && check.problems.length > 0 && (
-            <ul className="list-disc pl-4 text-xs text-ink-3">
-              {check.problems.map((p) => (
-                <li key={p}>{p}</li>
-              ))}
-            </ul>
-          )}
-          {account && preset.keyUrl && (
-            <ExternalButton url={preset.keyUrl} label={`Open ${new URL(preset.keyUrl).host}`} />
-          )}
-        </div>
-      )}
+      <Problem when={error}>{error}</Problem>
+      <Reveal when={settled && !canAuthor && check}>
+        {check && (
+          <div className="mt-4 flex flex-col gap-2 rounded-lg border border-warn/30 bg-warn/5 px-3 py-2.5 text-sm">
+            <p className="text-ink-2">
+              {!check.reachable || outright
+                ? sentence(check.summary)
+                : `kizn needs a model that can return structured output to write your practice items, and ${model} can't.`}
+            </p>
+            {check.reachable && !outright && check.problems.length > 0 && (
+              <ul className="list-disc pl-4 text-xs text-ink-3">
+                {check.problems.map((p) => (
+                  <li key={p}>{p}</li>
+                ))}
+              </ul>
+            )}
+            {account && preset.keyUrl && (
+              <ExternalButton url={preset.keyUrl} label={`Open ${new URL(preset.keyUrl).host}`} />
+            )}
+          </div>
+        )}
+      </Reveal>
       <div className="mt-5 flex items-center gap-2">
-        {settled && fixTo && (
+        <Reveal when={settled && fixTo}>
           <button
             type="button"
-            onClick={() => fix(fixTo)}
+            onClick={() => fixTo && fix(fixTo)}
             className="flex items-center gap-1 rounded-md px-2 py-1.5 text-sm text-ink-3 hover:bg-raised hover:text-ink"
           >
             <ArrowLeft size={14} aria-hidden /> {fixLabel}
           </button>
-        )}
+        </Reveal>
         <span className="flex-1" />
       </div>
     </div>

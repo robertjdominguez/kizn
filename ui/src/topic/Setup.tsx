@@ -18,6 +18,7 @@ import {
 import { AnimatePresence, motion } from "motion/react";
 import { type FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { Progress, type ProgressStep } from "../components/Progress";
+import { Reveal } from "../components/Reveal";
 import { subscribe } from "../events";
 import { settingsCanFix } from "../fixable";
 import { EASE, presence, rise } from "../motion";
@@ -76,7 +77,9 @@ export function Setup({ topicId }: { topicId?: string }) {
       className={`mx-auto flex w-full flex-col gap-5 px-6 py-8 transition-[max-width] duration-300 ${step === 2 ? "max-w-3xl" : "max-w-2xl"}`}
     >
       <Progress steps={STEPS} index={step} />
-      {error && <p className="text-sm text-danger">{error}</p>}
+      <Reveal when={error}>
+        <p className="text-sm text-danger">{error}</p>
+      </Reveal>
       <AnimatePresence mode="wait" initial={false}>
         <motion.div
           key={step}
@@ -216,7 +219,9 @@ function DraftStep({ topic }: { topic: TopicView | null }) {
         <h2 className="text-base font-semibold text-ink">
           {failed ? "Drafting stopped" : "Drafting what you'll be able to do…"}
         </h2>
-        {topic && <p className="text-sm text-ink-3">“{topic.goal}”</p>}
+        <Reveal when={topic} initial>
+          <p className="text-sm text-ink-3">“{topic?.goal}”</p>
+        </Reveal>
       </div>
       <ol className="flex flex-col gap-2">
         <AnimatePresence initial={false} mode="popLayout">
@@ -294,7 +299,7 @@ function DraftStep({ topic }: { topic: TopicView | null }) {
           </motion.div>
         )}
       </AnimatePresence>
-      {!failed && (
+      <Reveal when={!failed}>
         <div className="flex items-center justify-end">
           <button
             type="button"
@@ -305,7 +310,7 @@ function DraftStep({ topic }: { topic: TopicView | null }) {
             {stopping ? "Stopping after this outcome…" : "Stop"}
           </button>
         </div>
-      )}
+      </Reveal>
     </div>
   );
 }

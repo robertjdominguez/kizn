@@ -28,33 +28,39 @@ export function Today() {
   }, [load]);
 
   if (error) {
-    return <p className="p-6 text-sm text-danger">Couldn't load Today: {error}</p>;
+    return (
+      <motion.p variants={rise} initial="hidden" animate="shown" className="p-6 text-sm text-danger">
+        Couldn't load Today: {error}
+      </motion.p>
+    );
   }
   if (!today) return null;
 
   return (
     <div className="mx-auto w-full max-w-2xl px-6 py-10 flex flex-col gap-6">
-      {!today.model_configured && (
-        <motion.section
-          variants={rise}
-          initial="hidden"
-          animate="shown"
-          aria-label="Model"
-          className="flex items-start gap-3 rounded-lg border border-warn/40 bg-warn/5 px-4 py-3 text-sm"
-        >
-          <Plug size={16} className="mt-0.5 shrink-0 text-warn" aria-hidden />
-          <div className="flex flex-col gap-0.5">
-            <p className="font-medium text-ink">No model connected</p>
-            <p className="text-ink-3">
-              kizn writes practice questions and tutors with a model you choose: a local one or a provider you have a
-              key for.{" "}
-              <a href="#/settings" className="text-accent hover:underline">
-                Connect a model
-              </a>
-            </p>
-          </div>
-        </motion.section>
-      )}
+      <AnimatePresence initial={false}>
+        {!today.model_configured && (
+          <motion.section
+            key="model"
+            variants={rise}
+            {...presence}
+            aria-label="Model"
+            className="flex items-start gap-3 rounded-lg border border-warn/40 bg-warn/5 px-4 py-3 text-sm"
+          >
+            <Plug size={16} className="mt-0.5 shrink-0 text-warn" aria-hidden />
+            <div className="flex flex-col gap-0.5">
+              <p className="font-medium text-ink">No model connected</p>
+              <p className="text-ink-3">
+                kizn writes practice questions and tutors with a model you choose: a local one or a provider you have a
+                key for.{" "}
+                <a href="#/settings" className="text-accent hover:underline">
+                  Connect a model
+                </a>
+              </p>
+            </div>
+          </motion.section>
+        )}
+      </AnimatePresence>
 
       <AnimatePresence initial={false}>
         {today.topics.length > 0 && (
@@ -85,30 +91,32 @@ export function Today() {
         )}
       </AnimatePresence>
 
-      {today.topics.length === 0 && (
-        <motion.section
-          variants={rise}
-          initial="hidden"
-          animate="shown"
-          aria-label="Topics"
-          className="flex flex-col items-center gap-4 rounded-lg border border-hairline bg-subtle px-6 py-12 text-center"
-        >
-          <Sprout size={28} className="text-teal" aria-hidden />
-          <div className="flex flex-col gap-1">
-            <h2 className="text-base font-medium text-ink">Nothing to practise yet</h2>
-            <p className="max-w-sm text-sm text-ink-3">
-              Say what you want to be able to do and why. kizn drafts outcomes and concepts for you to edit, then writes
-              practice for them.
-            </p>
-          </div>
-          <a
-            href="#/new-topic"
-            className="rounded-md bg-teal/15 px-3 py-1.5 text-sm font-medium text-teal transition-colors hover:bg-teal/25"
+      <AnimatePresence initial={false}>
+        {today.topics.length === 0 && (
+          <motion.section
+            key="empty"
+            variants={rise}
+            {...presence}
+            aria-label="Topics"
+            className="flex flex-col items-center gap-4 rounded-lg border border-hairline bg-subtle px-6 py-12 text-center"
           >
-            Start a topic
-          </a>
-        </motion.section>
-      )}
+            <Sprout size={28} className="text-teal" aria-hidden />
+            <div className="flex flex-col gap-1">
+              <h2 className="text-base font-medium text-ink">Nothing to practise yet</h2>
+              <p className="max-w-sm text-sm text-ink-3">
+                Say what you want to be able to do and why. kizn drafts outcomes and concepts for you to edit, then
+                writes practice for them.
+              </p>
+            </div>
+            <a
+              href="#/new-topic"
+              className="rounded-md bg-teal/15 px-3 py-1.5 text-sm font-medium text-teal transition-colors hover:bg-teal/25"
+            >
+              Start a topic
+            </a>
+          </motion.section>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
