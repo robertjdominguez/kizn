@@ -8,8 +8,8 @@ use std::collections::HashSet;
 use std::time::Duration;
 
 use kizn_core::bank::{
-    BankedItem, CheckContext, Concept, ItemKind, LETTERS, TopicRef, bank_needs, blind_verdict, check_item, parse_blind,
-    shuffled_order,
+    BankedItem, CheckContext, Concept, ItemKind, LETTERS, OutcomeBank, Slot, TopicRef, bank_needs, blind_verdict,
+    check_item, next_need, parse_blind, shuffled_order,
 };
 use kizn_core::{Tier, sql_time};
 use kizn_model::ModelError;
@@ -66,13 +66,20 @@ fn blind_schema() -> Value {
     })
 }
 
+/// One batch to write: an outcome's slot, and how many it still needs.
+struct Job {
+    outcome: OutcomeRow,
+    slot: Slot,
+    count: usize,
+}
+
 impl Ctx {
-    /// Runs forever: writes the next outcome that needs items, or waits to
+    /// Runs forever: writes the next batch the learner will need, or waits to
     /// be woken (a confirm, a retry) or for a retry to come due.
     pub(crate) async fn bank_loop(self, wake: std::sync::Arc<tokio::sync::Notify>) {
         loop {
-            match self.next_outcome() {
-                Ok(Some(o)) => self.write_outcome(o).await,
+            match self.next_job() {
+                Ok(Some(job)) => self.run_job(job).await,
                 Ok(None) => {
                     let _ = tokio::time::timeout(Duration::from_secs(30), wake.notified()).await;
                 }
@@ -84,41 +91,57 @@ impl Ctx {
         }
     }
 
-    /// The first outcome, in topic and outcome order, that's waiting, was
-    /// left mid-write, or failed and is due a retry.
-    fn next_outcome(&self) -> Result<Option<OutcomeRow>, AppError> {
+    /// Settles every confirmed topic's outcome states (ready when nothing's
+    /// needed, waiting when something is; failed ones wait for their retry),
+    /// then returns the first batch to write: the oldest topic that needs
+    /// one, in the order its learner will need it (kizn_core::bank::next_need).
+    /// Worked out from what's stored, so a restart carries straight on.
+    fn next_job(&self) -> Result<Option<Job>, AppError> {
         let now = self.now();
+        let attempted: HashSet<String> =
+            self.store.attempts(None)?.into_iter().filter(|a| a.disputed_at.is_none()).map(|a| a.item_id).collect();
         for t in self.store.all_topics()?.into_iter().filter(|t| t.status == "confirmed") {
-            for o in self.store.outcomes(&t.id)? {
-                let due = match o.bank_state.as_str() {
-                    "waiting" | "writing" => true,
-                    "failed" => o.retry_at.as_deref().is_some_and(|r| r <= now.as_str()),
-                    // Ready, but short of what it should hold (left mid-write by
-                    // an older kizn, or used up by practice): top it up.
-                    "ready" => self.short_of_bank(&o)?,
-                    _ => false,
-                };
-                if due {
-                    return Ok(Some(o));
+            let outcomes = self.store.outcomes(&t.id)?;
+            let mut data = vec![];
+            for o in &outcomes {
+                let concept_ids: Vec<String> = self.store.concepts(&o.id)?.into_iter().map(|c| c.id).collect();
+                let items = self.store.items(&o.id, Some("active"))?;
+                data.push((o, concept_ids, items));
+            }
+            let mut moved = false;
+            let mut eligible = vec![];
+            for (o, concept_ids, items) in &data {
+                let paused = o.bank_state == "failed" && o.retry_at.as_deref().is_some_and(|r| r > now.as_str());
+                if paused {
+                    continue;
                 }
+                let banked = banked(items);
+                let target = Tier::parse(&o.target_tier).unwrap_or(Tier::Understand);
+                let state =
+                    if bank_needs(target, concept_ids, &banked, &attempted).is_empty() { "ready" } else { "waiting" };
+                if o.bank_state != state {
+                    self.store.set_bank_state(&o.id, state, None, None)?;
+                    moved = true;
+                }
+                eligible.push((*o, concept_ids, items));
+            }
+            if moved {
+                self.changed(&t.id);
+            }
+            let banks: Vec<OutcomeBank> = eligible
+                .iter()
+                .map(|(o, concept_ids, items)| OutcomeBank {
+                    target: Tier::parse(&o.target_tier).unwrap_or(Tier::Understand),
+                    concept_ids,
+                    active: banked(items),
+                    attempted: &attempted,
+                })
+                .collect();
+            if let Some((i, slot, count)) = next_need(&banks) {
+                return Ok(Some(Job { outcome: eligible[i].0.clone(), slot, count }));
             }
         }
         Ok(None)
-    }
-
-    fn short_of_bank(&self, o: &OutcomeRow) -> Result<bool, AppError> {
-        let target = Tier::parse(&o.target_tier).unwrap_or(Tier::Understand);
-        let concept_ids: Vec<String> = self.store.concepts(&o.id)?.into_iter().map(|c| c.id).collect();
-        let active = self.store.items(&o.id, Some("active"))?;
-        let banked: Vec<BankedItem> = active
-            .iter()
-            .map(|i| BankedItem {
-                id: &i.id,
-                kind: ItemKind::parse(&i.kind).unwrap_or(ItemKind::Recall),
-                concept_ids: &i.concept_ids,
-            })
-            .collect();
-        Ok(!bank_needs(target, &concept_ids, &banked, &HashSet::new()).is_empty())
     }
 
     fn fail(&self, o: &OutcomeRow, why: &str, retry_in: chrono::Duration) {
@@ -127,191 +150,176 @@ impl Ctx {
         self.changed(&o.topic_id);
     }
 
-    async fn write_outcome(&self, o: OutcomeRow) {
+    async fn run_job(&self, job: Job) {
+        let o = &job.outcome;
         let _ = self.store.set_bank_state(&o.id, "writing", None, None);
         self.changed(&o.topic_id);
         let models = self.role_model(Role::Author).and_then(|a| Ok((a, self.role_model(Role::Checker)?)));
         let (author, checker) = match models {
             Ok(m) => m,
-            Err(e) => return self.fail(&o, &e.to_string(), chrono::Duration::minutes(RETRY_AFTER_MINUTES)),
+            Err(e) => return self.fail(o, &e.to_string(), chrono::Duration::minutes(RETRY_AFTER_MINUTES)),
         };
-        match self.fill(&o, &author, &checker).await {
-            Ok(Filled::Full) => {
-                let _ = self.store.set_bank_state(&o.id, "ready", None, None);
+        match self.write_batch(o, &job.slot, job.count, &author, &checker).await {
+            Err(e) => self.fail(o, &e.to_string(), chrono::Duration::minutes(RETRY_AFTER_MINUTES)),
+            Ok(_) => {
+                // Several runs in a row with nothing usable: leave it a while.
+                let recent =
+                    self.store.recent_batch_accepts(&o.id, EMPTY_RUNS_BEFORE_BACKOFF as i64).unwrap_or_default();
+                if recent.len() >= EMPTY_RUNS_BEFORE_BACKOFF && recent.iter().all(|n| *n == 0) {
+                    return self.fail(
+                        o,
+                        "the author model hasn't written usable items for this outcome yet; kizn will try again later",
+                        chrono::Duration::hours(BACKOFF_HOURS),
+                    );
+                }
+                // Settled (ready or waiting) by the next pass.
+                let _ = self.store.set_bank_state(&o.id, "waiting", None, None);
                 self.changed(&o.topic_id);
             }
-            Ok(Filled::NothingUsable) => self.fail(
-                &o,
-                "the author model hasn't written usable items for this outcome yet; kizn will try again later",
-                chrono::Duration::hours(BACKOFF_HOURS),
-            ),
-            Err(e) => self.fail(&o, &e.to_string(), chrono::Duration::minutes(RETRY_AFTER_MINUTES)),
         }
     }
 
-    async fn fill(&self, o: &OutcomeRow, author: &RoleModel, checker: &RoleModel) -> Result<Filled, ModelError> {
+    /// Writes one batch for a slot: the author writes, the code checks, the
+    /// checker answers each scored item blind. Returns how many went live.
+    async fn write_batch(
+        &self,
+        o: &OutcomeRow,
+        slot: &Slot,
+        count: usize,
+        author: &RoleModel,
+        checker: &RoleModel,
+    ) -> Result<i64, ModelError> {
         let db = |e: kizn_store::StoreError| ModelError::Config(e.to_string());
         let topic =
             self.store.topic(&o.topic_id).map_err(db)?.ok_or_else(|| ModelError::Config("topic gone".into()))?;
         let target = Tier::parse(&o.target_tier).unwrap_or(Tier::Understand);
         let concepts = self.store.concepts(&o.id).map_err(db)?;
-        let concept_ids: Vec<String> = concepts.iter().map(|c| c.id.clone()).collect();
         let all_topics = self.store.all_topics().map_err(db)?;
-        let mut empty_batches = 0;
-        // A slot is filled to its full size before moving on. (bank_needs
-        // only reports a slot while it's below the refill line, so asking it
-        // again after every batch would stop each slot halfway.)
-        let mut filling: Option<(kizn_core::bank::Slot, usize)> = None;
-        loop {
-            let active = self.store.items(&o.id, Some("active")).map_err(db)?;
-            let banked: Vec<BankedItem> = active
-                .iter()
-                .map(|i| BankedItem {
-                    id: &i.id,
-                    kind: ItemKind::parse(&i.kind).unwrap_or(ItemKind::Recall),
-                    concept_ids: &i.concept_ids,
-                })
-                .collect();
-            // Practice (Phase 4) will mark items attempted; until then none are.
-            let needs = bank_needs(target, &concept_ids, &banked, &HashSet::new());
-            let next = filling.take().or_else(|| needs.into_iter().next());
-            let Some((slot, missing)) = next else { return Ok(Filled::Full) };
+        let count = count.min(ITEMS_PER_CALL);
+        let mut existing: Vec<(String, Vec<String>)> = self
+            .store
+            .items(&o.id, None)
+            .map_err(db)?
+            .into_iter()
+            .filter(|i| i.status != "refused")
+            .map(|i| (i.stem, i.concept_ids))
+            .collect();
+        let slot_concept = slot.concept_id.as_ref().and_then(|id| concepts.iter().find(|c| &c.id == id));
+        let tier_ask = match slot.kind {
+            ItemKind::Recall => "remember or understand".to_string(),
+            ItemKind::Apply => Tier::apply_tier_for(target).name().to_string(),
+            ItemKind::Target | ItemKind::Explain => target.name().to_string(),
+        };
+        // The rules that refuse most items, said concretely for this
+        // request: models follow a named constraint better than a general one.
+        let concept_rule = match (slot.kind, slot_concept) {
+            (ItemKind::Recall, Some(c)) => format!(
+                "Each item tests exactly one concept: \"{}\". Set \"concepts\" to [\"{}\"] and nothing else. \
+                 (kizn counts each answer as evidence about that one concept, so an item that brings in another \
+                 concept is refused.) The tier is remember or understand.",
+                c.statement, c.statement
+            ),
+            (ItemKind::Explain, _) => "Write explain items: a prompt and an exemplar, no options.".to_string(),
+            (kind, _) => format!(
+                "Each item is a scenario that needs at least two of the concepts listed, named in \"concepts\" \
+                 exactly as written there. The tier is {tier_ask}.{}",
+                if kind == ItemKind::Target { " It's the outcome's target level." } else { "" }
+            ),
+        };
+        let ask = format!(
+            "Write {count} {} item{}. {concept_rule} A wrong option's \"foundation\" names a more basic topic \
+             than \"{}\", never \"{}\" itself (or \"none\").\n\n<input>\n{}\n</input>",
+            slot.kind.name(),
+            if count == 1 { "" } else { "s" },
+            topic.title,
+            topic.title,
+            json!({
+                "topic": topic.title, "goal": topic.goal, "outcome": o.statement, "target_tier": target.name(),
+                "kind": slot.kind.name(), "tier": tier_ask, "count": count,
+                "concepts": concepts.iter().map(|c| c.statement.as_str()).collect::<Vec<_>>(),
+                "slot_concept": slot_concept.map(|c| c.statement.as_str()),
+                "existing_stems": existing.iter().map(|(s, _)| s.as_str()).collect::<Vec<_>>(),
+                "topics": all_topics.iter().map(|t| t.title.as_str()).collect::<Vec<_>>(),
+            })
+        );
 
-            let count = missing.min(ITEMS_PER_CALL);
-            let mut existing: Vec<(String, Vec<String>)> = self
-                .store
-                .items(&o.id, None)
-                .map_err(db)?
-                .into_iter()
-                .filter(|i| i.status != "refused")
-                .map(|i| (i.stem, i.concept_ids))
-                .collect();
-            let slot_concept = slot.concept_id.as_ref().and_then(|id| concepts.iter().find(|c| &c.id == id));
-            let tier_ask = match slot.kind {
-                ItemKind::Recall => "remember or understand".to_string(),
-                ItemKind::Apply => Tier::apply_tier_for(target).name().to_string(),
-                ItemKind::Target | ItemKind::Explain => target.name().to_string(),
-            };
-            // The rules that refuse most items, said concretely for this
-            // request: models follow a named constraint better than a general one.
-            let concept_rule = match (slot.kind, slot_concept) {
-                (ItemKind::Recall, Some(c)) => format!(
-                    "Each item tests exactly one concept: \"{}\". Set \"concepts\" to [\"{}\"] and nothing else. \
-                     (kizn counts each answer as evidence about that one concept, so an item that brings in another \
-                     concept is refused.) The tier is remember or understand.",
-                    c.statement, c.statement
-                ),
-                (ItemKind::Explain, _) => "Write explain items: a prompt and an exemplar, no options.".to_string(),
-                (kind, _) => format!(
-                    "Each item is a scenario that needs at least two of the concepts listed, named in \"concepts\" \
-                     exactly as written there. The tier is {tier_ask}.{}",
-                    if kind == ItemKind::Target { " It's the outcome's target level." } else { "" }
-                ),
-            };
-            let ask = format!(
-                "Write {count} {} item{}. {concept_rule} A wrong option's \"foundation\" names a more basic topic \
-                 than \"{}\", never \"{}\" itself (or \"none\").\n\n<input>\n{}\n</input>",
-                slot.kind.name(),
-                if count == 1 { "" } else { "s" },
-                topic.title,
-                topic.title,
-                json!({
-                    "topic": topic.title, "goal": topic.goal, "outcome": o.statement, "target_tier": target.name(),
-                    "kind": slot.kind.name(), "tier": tier_ask, "count": count,
-                    "concepts": concepts.iter().map(|c| c.statement.as_str()).collect::<Vec<_>>(),
-                    "slot_concept": slot_concept.map(|c| c.statement.as_str()),
-                    "existing_stems": existing.iter().map(|(s, _)| s.as_str()).collect::<Vec<_>>(),
-                    "topics": all_topics.iter().map(|t| t.title.as_str()).collect::<Vec<_>>(),
-                })
-            );
+        let batch = self.id();
+        self.store.start_batch(&batch, &o.id, &author.provider, &self.now()).map_err(db)?;
+        let mut counts = BatchCounts { asked: count as i64, ..Default::default() };
+        let written = author.client.complete_json(WRITE_ITEMS, &ask, &items_schema(), author.mode).await;
+        let (reply, usage) = match written {
+            Ok(r) => r,
+            Err(e) => {
+                let _ = self.store.finish_batch(&batch, &counts, Some(&e.to_string()), &self.now());
+                return Err(e);
+            }
+        };
+        counts.prompt_tokens += usage.prompt_tokens as i64;
+        counts.completion_tokens += usage.completion_tokens as i64;
 
-            let batch = self.id();
-            self.store.start_batch(&batch, &o.id, &author.provider, &self.now()).map_err(db)?;
-            let mut counts = BatchCounts { asked: count as i64, ..Default::default() };
-            let written = author.client.complete_json(WRITE_ITEMS, &ask, &items_schema(), author.mode).await;
-            let (reply, usage) = match written {
-                Ok(r) => r,
-                Err(e) => {
-                    let _ = self.store.finish_batch(&batch, &counts, Some(&e.to_string()), &self.now());
-                    return Err(e);
-                }
+        let concept_refs: Vec<Concept> = concepts.iter().map(|c| Concept { id: &c.id, name: &c.statement }).collect();
+        let topic_refs: Vec<TopicRef> = all_topics.iter().map(|t| TopicRef { id: &t.id, title: &t.title }).collect();
+        for draft in reply["items"].as_array().cloned().unwrap_or_default().iter().take(count) {
+            let ctx = CheckContext {
+                kind: slot.kind,
+                target,
+                concepts: &concept_refs,
+                slot_concept_id: slot.concept_id.as_deref(),
+                existing: &existing,
+                topics: &topic_refs,
+                topic_id: &topic.id,
             };
-            counts.prompt_tokens += usage.prompt_tokens as i64;
-            counts.completion_tokens += usage.completion_tokens as i64;
-
-            let concept_refs: Vec<Concept> =
-                concepts.iter().map(|c| Concept { id: &c.id, name: &c.statement }).collect();
-            let topic_refs: Vec<TopicRef> =
-                all_topics.iter().map(|t| TopicRef { id: &t.id, title: &t.title }).collect();
-            for draft in reply["items"].as_array().cloned().unwrap_or_default().iter().take(count) {
-                let ctx = CheckContext {
-                    kind: slot.kind,
-                    target,
-                    concepts: &concept_refs,
-                    slot_concept_id: slot.concept_id.as_deref(),
-                    existing: &existing,
-                    topics: &topic_refs,
-                    topic_id: &topic.id,
-                };
-                let (status, reason, item) = match check_item(draft, &ctx) {
-                    Err(refusal) => ("refused", Some(refusal.to_string()), None),
-                    Ok(item) => match &item.options {
-                        None => ("active", None, Some(item)),
-                        Some(options) => match self.blind(checker, &item.stem, options).await {
-                            Ok(None) => ("active", None, Some(item)),
-                            Ok(Some(why)) => ("refused", Some(format!("blind check: {why}")), Some(item)),
-                            Err(e) => {
-                                let _ = self.store.finish_batch(&batch, &counts, Some(&e.to_string()), &self.now());
-                                return Err(e);
-                            }
-                        },
+            let (status, reason, item) = match check_item(draft, &ctx) {
+                Err(refusal) => ("refused", Some(refusal.to_string()), None),
+                Ok(item) => match &item.options {
+                    None => ("active", None, Some(item)),
+                    Some(options) => match self.blind(checker, &item.stem, options).await {
+                        Ok(None) => ("active", None, Some(item)),
+                        Ok(Some(why)) => ("refused", Some(format!("blind check: {why}")), Some(item)),
+                        Err(e) => {
+                            let _ = self.store.finish_batch(&batch, &counts, Some(&e.to_string()), &self.now());
+                            return Err(e);
+                        }
                     },
-                };
-                let row = ItemRow {
-                    id: self.id(),
-                    topic_id: topic.id.clone(),
-                    outcome_id: o.id.clone(),
-                    batch_id: Some(batch.clone()),
-                    kind: slot.kind.name().into(),
-                    tier: item.as_ref().map(|i| i.tier.name()).unwrap_or(target.name()).into(),
-                    concept_ids: item
-                        .as_ref()
-                        .map(|i| i.concept_ids.clone())
-                        .unwrap_or_else(|| slot.concept_id.clone().into_iter().collect()),
-                    stem: item
-                        .as_ref()
-                        .map(|i| i.stem.clone())
-                        .unwrap_or_else(|| draft["stem"].as_str().unwrap_or("").to_string()),
-                    options_json: item
-                        .as_ref()
-                        .and_then(|i| i.options.as_ref())
-                        .map(|o| serde_json::to_string(o).expect("options serialise")),
-                    exemplar: item.as_ref().and_then(|i| i.exemplar.clone()),
-                    source_ref: item.as_ref().and_then(|i| i.source_ref.clone()),
-                    model_knowledge: item.as_ref().is_none_or(|i| i.model_knowledge),
-                    status: status.into(),
-                    status_reason: reason,
-                    created_at: self.now(),
-                };
-                self.store.insert_item(&row).map_err(db)?;
-                if status == "active" {
-                    counts.accepted += 1;
-                    existing.push((row.stem.clone(), row.concept_ids.clone()));
-                    self.changed(&o.topic_id);
-                } else {
-                    counts.refused += 1;
-                }
-            }
-            self.store.finish_batch(&batch, &counts, None, &self.now()).map_err(db)?;
-            let left = missing.saturating_sub(counts.accepted as usize);
-            if left > 0 {
-                filling = Some((slot, left));
-            }
-            empty_batches = if counts.accepted == 0 { empty_batches + 1 } else { 0 };
-            if empty_batches >= EMPTY_RUNS_BEFORE_BACKOFF {
-                return Ok(Filled::NothingUsable);
+                },
+            };
+            let row = ItemRow {
+                id: self.id(),
+                topic_id: topic.id.clone(),
+                outcome_id: o.id.clone(),
+                batch_id: Some(batch.clone()),
+                kind: slot.kind.name().into(),
+                tier: item.as_ref().map(|i| i.tier.name()).unwrap_or(target.name()).into(),
+                concept_ids: item
+                    .as_ref()
+                    .map(|i| i.concept_ids.clone())
+                    .unwrap_or_else(|| slot.concept_id.clone().into_iter().collect()),
+                stem: item
+                    .as_ref()
+                    .map(|i| i.stem.clone())
+                    .unwrap_or_else(|| draft["stem"].as_str().unwrap_or("").to_string()),
+                options_json: item
+                    .as_ref()
+                    .and_then(|i| i.options.as_ref())
+                    .map(|o| serde_json::to_string(o).expect("options serialise")),
+                exemplar: item.as_ref().and_then(|i| i.exemplar.clone()),
+                source_ref: item.as_ref().and_then(|i| i.source_ref.clone()),
+                model_knowledge: item.as_ref().is_none_or(|i| i.model_knowledge),
+                status: status.into(),
+                status_reason: reason,
+                created_at: self.now(),
+            };
+            self.store.insert_item(&row).map_err(db)?;
+            if status == "active" {
+                counts.accepted += 1;
+                existing.push((row.stem.clone(), row.concept_ids.clone()));
+                self.changed(&o.topic_id);
+            } else {
+                counts.refused += 1;
             }
         }
+        self.store.finish_batch(&batch, &counts, None, &self.now()).map_err(db)?;
+        Ok(counts.accepted)
     }
 
     /// The checker answers the item blind (stem and shuffled options, no
@@ -337,7 +345,13 @@ impl Ctx {
     }
 }
 
-enum Filled {
-    Full,
-    NothingUsable,
+fn banked(items: &[ItemRow]) -> Vec<BankedItem<'_>> {
+    items
+        .iter()
+        .map(|i| BankedItem {
+            id: &i.id,
+            kind: ItemKind::parse(&i.kind).unwrap_or(ItemKind::Recall),
+            concept_ids: &i.concept_ids,
+        })
+        .collect()
 }
