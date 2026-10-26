@@ -7,7 +7,7 @@ pub enum ModelError {
     Unreachable(String),
     #[error("couldn't find the host {0}")]
     HostNotFound(String),
-    #[error("no answer within {0} seconds")]
+    #[error("the model took longer than kizn waited ({})", wait(*.0))]
     Timeout(u64),
     #[error("the endpoint refused the key (HTTP {0})")]
     KeyRefused(u16),
@@ -62,6 +62,10 @@ impl ModelError {
             _ => ModelError::Status { status, detail: snippet(body) },
         }
     }
+}
+
+fn wait(secs: u64) -> String {
+    if secs >= 120 { format!("{} minutes", secs / 60) } else { format!("{secs} seconds") }
 }
 
 /// `scheme://host:port` of a URL: what "nothing answered at" names.

@@ -3,10 +3,13 @@
 //! [`Clock`] and [`Rng`] traits so scenarios can say "3 days later" and
 //! shuffles are reproducible.
 
+pub mod bank;
 pub mod clock;
 pub mod id;
 pub mod rng;
+pub mod tier;
 
 pub use clock::{Clock, FakeClock, SystemClock, sql_time};
 pub use id::new_id;
 pub use rng::{Rng, SeededRng};
+pub use tier::Tier;

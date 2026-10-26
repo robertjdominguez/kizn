@@ -5,6 +5,7 @@ import type { Command } from "./bindings/Command";
 import type { Reply } from "./bindings/Reply";
 import type { SettingsView } from "./bindings/SettingsView";
 import type { TodayView } from "./bindings/TodayView";
+import type { TopicView } from "./bindings/TopicView";
 
 // The one way the UI talks to kizn-app: a Command in, its Reply out. In the
 // Tauri window that's IPC (the `rpc` command); in the browser loop it's
@@ -21,6 +22,13 @@ const REPLY = {
   remove_provider: "settings",
   test_provider: "settings",
   assign_role: "settings",
+  start_topic: "topic",
+  stop_drafting: "topic",
+  resume_drafting: "topic",
+  save_draft: "topic",
+  confirm_topic: "topic",
+  get_topic: "topic",
+  retry_bank: "topic",
 } as const satisfies Record<Command["type"], Reply["type"]>;
 
 type ReplyData<T extends Reply["type"]> = Extract<Reply, { type: T }>["data"];
@@ -58,4 +66,4 @@ export async function call<C extends Command>(cmd: C): Promise<ReplyFor<C>> {
   return reply.data as ReplyFor<C>;
 }
 
-export type { AppInfo, SettingsView, TodayView };
+export type { AppInfo, SettingsView, TodayView, TopicView };

@@ -3,22 +3,26 @@
 //! forward the [`Event`]s from [`App::subscribe`]. The UI's types are
 //! generated from these (`just types`).
 
+mod bank;
 mod command;
 mod config;
 mod events;
 mod paths;
 mod secrets;
 mod settings;
+mod topics;
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::atomic::AtomicBool;
+use std::sync::{Arc, Mutex};
 
 use kizn_core::{Clock, Rng, SeededRng, SystemClock};
 use kizn_store::Store;
 use tokio::sync::broadcast;
 
 pub use command::{
-    AppError, AppInfo, CheckView, Command, Event, KeyView, ProviderView, Reply, Role, RolesView, SettingsView,
-    TodayView, TopicSummary,
+    AppError, AppInfo, CheckView, Command, ConceptView, DraftInput, DraftOutcome, Event, KeyView, OutcomeView,
+    ProviderView, Reply, Role, RolesView, SettingsView, SlotView, TodayView, TopicSummary, TopicView,
 };
 pub use config::{CONFIG_FILE, Config};
 pub use kizn_model::Http;
@@ -50,12 +54,30 @@ impl AppDeps {
     }
 }
 
-pub struct App {
+/// What background jobs (drafting, bank writing) need: cheap to clone.
+#[derive(Clone)]
+pub struct Ctx {
     paths: Paths,
-    store: Store,
+    store: Arc<Store>,
     deps: AppDeps,
     events: broadcast::Sender<Event>,
+}
+
+pub struct App {
+    ctx: Ctx,
+    /// Drafts being drafted, and the flag that stops each between calls.
+    drafting: Mutex<HashMap<String, Arc<AtomicBool>>>,
+    /// Wakes the bank writer; it starts on first use (it needs the runtime).
+    bank_wake: Arc<tokio::sync::Notify>,
+    bank_started: AtomicBool,
     _watcher: Option<events::ConfigWatcher>,
+}
+
+impl std::ops::Deref for App {
+    type Target = Ctx;
+    fn deref(&self) -> &Ctx {
+        &self.ctx
+    }
 }
 
 impl App {
@@ -73,7 +95,13 @@ impl App {
         let watcher = events::watch_config(&paths.config_dir, events.clone())
             .map_err(|e| eprintln!("kizn: not watching config.toml: {e}"))
             .ok();
-        Ok(App { paths, store, deps, events, _watcher: watcher })
+        Ok(App {
+            ctx: Ctx { paths, store: Arc::new(store), deps, events },
+            drafting: Mutex::new(HashMap::new()),
+            bank_wake: Arc::new(tokio::sync::Notify::new()),
+            bank_started: AtomicBool::new(false),
+            _watcher: watcher,
+        })
     }
 
     pub fn paths(&self) -> &Paths {
@@ -85,11 +113,12 @@ impl App {
     }
 
     pub async fn handle(&self, cmd: Command) -> Result<Reply, AppError> {
+        // Picks up banks left mid-write when kizn last closed.
+        self.ensure_bank();
         match cmd {
             Command::GetToday => {
                 let config = Config::load(&self.paths.config_dir)?;
-                let topics =
-                    self.store.topics()?.into_iter().map(|t| TopicSummary { id: t.id, title: t.title }).collect();
+                let topics = self.topic_summaries()?;
                 Ok(Reply::Today(TodayView { topics, model_configured: config.model_configured() }))
             }
             Command::GetAppInfo => Ok(Reply::AppInfo(AppInfo {
@@ -108,6 +137,40 @@ impl App {
             Command::RemoveProvider { name } => self.remove_provider(&name).map(Reply::Settings),
             Command::TestProvider { name } => self.test_provider(&name).await.map(Reply::Settings),
             Command::AssignRole { role, provider } => self.assign_role(role, provider.as_deref()).map(Reply::Settings),
+            Command::StartTopic { title, goal } => self.start_topic(&title, &goal).map(Reply::Topic),
+            Command::StopDrafting { topic_id } => self.stop_drafting(&topic_id).map(Reply::Topic),
+            Command::ResumeDrafting { topic_id } => self.resume_drafting(&topic_id).map(Reply::Topic),
+            Command::SaveDraft { topic_id, draft } => self.save_draft(&topic_id, &draft).map(Reply::Topic),
+            Command::ConfirmTopic { topic_id } => self.confirm_topic(&topic_id).map(Reply::Topic),
+            Command::GetTopic { topic_id } => self.topic_view(&topic_id).map(Reply::Topic),
+            Command::RetryBank { outcome_id } => self.retry_bank(&outcome_id).map(Reply::Topic),
         }
+    }
+}
+
+impl App {
+    /// Starts the bank writer if it isn't running yet. `KIZN_BANK_PAUSED=1`
+    /// (`just dev mock paused`) holds it, so seeded states stay as seeded
+    /// while the UI is reviewed.
+    fn ensure_bank(&self) {
+        if std::env::var("KIZN_BANK_PAUSED").is_ok_and(|v| v == "1") {
+            return;
+        }
+        if !self.bank_started.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            tokio::spawn(self.ctx.clone().bank_loop(self.bank_wake.clone()));
+        }
+    }
+
+    /// Wakes the bank writer (starting it if needed).
+    fn wake_bank(&self) {
+        self.ensure_bank();
+        self.bank_wake.notify_one();
+    }
+
+    fn retry_bank(&self, outcome_id: &str) -> Result<TopicView, AppError> {
+        let o = self.store.outcome(outcome_id)?.ok_or_else(|| AppError::Refused("there's no such outcome".into()))?;
+        self.store.set_bank_state(&o.id, "waiting", None, None)?;
+        self.wake_bank();
+        self.topic_view(&o.topic_id)
     }
 }

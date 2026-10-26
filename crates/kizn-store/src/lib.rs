@@ -2,6 +2,8 @@
 //! binary and applied on open. Until v0.1.0 is tagged, migrations may be
 //! edited in place; after that they're append-only.
 
+mod topics;
+
 use std::path::Path;
 use std::sync::Mutex;
 
@@ -9,8 +11,11 @@ use rusqlite::Connection;
 
 /// In order. The schema version is the number applied, kept in
 /// `PRAGMA user_version`.
-const MIGRATIONS: &[&str] =
-    &[include_str!("../migrations/0001_init.sql"), include_str!("../migrations/0002_provider_checks.sql")];
+const MIGRATIONS: &[&str] = &[
+    include_str!("../migrations/0001_init.sql"),
+    include_str!("../migrations/0002_provider_checks.sql"),
+    include_str!("../migrations/0003_topics_and_bank.sql"),
+];
 
 pub const SCHEMA_VERSION: u32 = MIGRATIONS.len() as u32;
 
@@ -23,6 +28,8 @@ pub enum StoreError {
 }
 
 pub type Result<T> = std::result::Result<T, StoreError>;
+
+pub use topics::{BatchCounts, ConceptRow, ItemRow, OutcomeRow, TopicRow};
 
 /// What's in a database file, read-only: for `just inspect db`.
 pub struct Inspection {
@@ -53,11 +60,6 @@ pub struct CheckRow {
     pub check_json: String,
 }
 
-pub struct TopicRow {
-    pub id: String,
-    pub title: String,
-}
-
 pub struct Store {
     conn: Mutex<Connection>,
 }
@@ -78,15 +80,16 @@ impl Store {
         Ok(Store { conn: Mutex::new(conn) })
     }
 
-    pub fn schema_version(&self) -> Result<u32> {
-        user_version(&self.conn.lock().unwrap())
+    /// Runs SQL as given: dev fixtures (`just seed`), never app code.
+    pub fn execute_batch(&self, sql: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.pragma_update(None, "foreign_keys", "ON")?;
+        conn.execute_batch(sql)?;
+        Ok(())
     }
 
-    pub fn topics(&self) -> Result<Vec<TopicRow>> {
-        let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare("SELECT id, title FROM topics ORDER BY created_at, id")?;
-        let rows = stmt.query_map([], |r| Ok(TopicRow { id: r.get(0)?, title: r.get(1)? }))?;
-        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    pub fn schema_version(&self) -> Result<u32> {
+        user_version(&self.conn.lock().unwrap())
     }
 }
 
@@ -143,7 +146,7 @@ mod tests {
         let path = dir.path().join("kizn.db");
         let store = Store::open(&path).unwrap();
         assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-        assert!(store.topics().unwrap().is_empty());
+        assert!(store.all_topics().unwrap().is_empty());
         drop(store);
         // Reopening applies nothing twice.
         assert_eq!(Store::open(&path).unwrap().schema_version().unwrap(), SCHEMA_VERSION);
@@ -156,7 +159,8 @@ mod tests {
         drop(Store::open(&path).unwrap());
         let i = inspect(&path).unwrap();
         assert_eq!(i.schema_version, SCHEMA_VERSION);
-        assert_eq!(i.tables, vec![("provider_checks".to_string(), 0), ("topics".to_string(), 0)]);
+        let names: Vec<&str> = i.tables.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(names, vec!["concepts", "item_batches", "items", "outcomes", "provider_checks", "topics"]);
     }
 
     #[test]

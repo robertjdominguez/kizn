@@ -45,6 +45,53 @@ pub enum Command {
         #[ts(optional)]
         provider: Option<String>,
     },
+    /// Starts a draft from a goal; the author drafts it in the background.
+    StartTopic {
+        title: String,
+        goal: String,
+    },
+    StopDrafting {
+        topic_id: String,
+    },
+    /// Carries on a draft that failed or was stopped, from where it left off.
+    ResumeDrafting {
+        topic_id: String,
+    },
+    /// Replaces a draft with the learner's shaped version.
+    SaveDraft {
+        topic_id: String,
+        draft: DraftInput,
+    },
+    ConfirmTopic {
+        topic_id: String,
+    },
+    GetTopic {
+        topic_id: String,
+    },
+    /// Tries writing an outcome's items again now.
+    RetryBank {
+        outcome_id: String,
+    },
+}
+
+/// A draft as the learner shaped it.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct DraftInput {
+    pub outcomes: Vec<DraftOutcome>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct DraftOutcome {
+    /// The outcome's id if it came from the draft; absent for a new one.
+    #[ts(optional)]
+    pub id: Option<String>,
+    pub statement: String,
+    /// A Bloom tier ("evaluate") or its plain words ("judge and recommend").
+    pub target: String,
+    pub reason: String,
+    pub concepts: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -55,6 +102,74 @@ pub enum Reply {
     AppInfo(AppInfo),
     Settings(SettingsView),
     Models(Vec<String>),
+    Topic(TopicView),
+}
+
+/// A topic, draft or confirmed, with its outcomes, concepts and bank.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct TopicView {
+    pub id: String,
+    pub title: String,
+    pub goal: String,
+    /// "draft" or "confirmed".
+    pub status: String,
+    /// "drafting", "drafted", "stopped" or "failed".
+    pub draft_state: String,
+    pub draft_error: Option<String>,
+    pub outcomes: Vec<OutcomeView>,
+    /// Active items across the topic, and what a full bank holds.
+    #[ts(type = "number")]
+    pub active: i64,
+    #[ts(type = "number")]
+    pub expected: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct OutcomeView {
+    pub id: String,
+    #[ts(type = "number")]
+    pub ord: i64,
+    pub statement: String,
+    /// The Bloom tier, and what the learner reads ("judge and recommend").
+    pub target: String,
+    pub target_plain: String,
+    pub reason: String,
+    /// "pending", "drafting" or "done".
+    pub concepts_state: String,
+    /// "waiting", "writing", "ready" or "failed".
+    pub bank_state: String,
+    pub bank_error: Option<String>,
+    #[ts(type = "number")]
+    pub active: i64,
+    #[ts(type = "number")]
+    pub expected: i64,
+    pub concepts: Vec<ConceptView>,
+    /// The kinds of practice the outcome gets, in order, each with how many
+    /// questions it has of how many it holds: one recall slot per concept,
+    /// then use it, at the target (when above use it), explain it back.
+    pub slots: Vec<SlotView>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct SlotView {
+    /// "recall", "apply", "target" or "explain".
+    pub kind: String,
+    /// The concept, for a recall slot.
+    pub concept: Option<String>,
+    #[ts(type = "number")]
+    pub have: i64,
+    #[ts(type = "number")]
+    pub size: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct ConceptView {
+    pub id: String,
+    pub statement: String,
 }
 
 /// What a provider is used for.
@@ -144,6 +259,8 @@ pub struct RolesView {
 pub enum Event {
     /// config.toml changed on disk (by kizn or by hand).
     ConfigChanged,
+    /// A topic's draft or bank moved on: refetch it.
+    TopicChanged { topic_id: String },
 }
 
 /// The home screen.
@@ -160,6 +277,17 @@ pub struct TodayView {
 pub struct TopicSummary {
     pub id: String,
     pub title: String,
+    pub status: String,
+    /// Some outcome's bank isn't ready yet.
+    pub preparing: bool,
+    #[ts(type = "number")]
+    pub outcomes: i64,
+    #[ts(type = "number")]
+    pub concepts: i64,
+    #[ts(type = "number")]
+    pub active: i64,
+    #[ts(type = "number")]
+    pub expected: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]

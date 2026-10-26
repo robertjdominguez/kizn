@@ -27,6 +27,8 @@ const testDir = defineBddConfig({
 export default defineConfig({
   testDir,
   fullyParallel: false,
+  // Some journeys wait on background work (drafting, writing a bank).
+  timeout: 120_000,
   workers: 1,
   forbidOnly: !!process.env.CI,
   reporter: process.env.CI ? [["list"], ["html", { open: "never" }]] : "list",

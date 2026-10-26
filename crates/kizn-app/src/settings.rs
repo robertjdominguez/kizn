@@ -75,22 +75,32 @@ impl App {
     }
 
     fn key_view(&self, name: &str, p: &ProviderEntry) -> KeyView {
-        match (&p.key, &p.key_env) {
-            (Some(k), _) if k.starts_with(KEYCHAIN_PREFIX) => {
-                let account = &k[KEYCHAIN_PREFIX.len()..];
-                KeyView::Keychain { present: matches!(self.deps.secrets.get(account), Ok(Some(_))) }
-            }
-            (Some(_), _) => KeyView::Refused {
-                reason: format!(
-                    "config.toml has a key written into it for {name}. kizn only reads keys from the keychain \
-                     (key = \"{KEYCHAIN_PREFIX}{name}\") or an environment variable (key_env)."
-                ),
-            },
-            (None, Some(var)) => KeyView::Env { var: var.clone(), present: std::env::var_os(var).is_some() },
-            (None, None) => KeyView::None,
-        }
+        key_view(self.deps.secrets.as_ref(), name, p)
     }
 
+    fn resolve_key(&self, name: &str, p: &ProviderEntry) -> Result<Option<String>, AppError> {
+        resolve_key(self.deps.secrets.as_ref(), name, p)
+    }
+}
+
+pub(crate) fn key_view(secrets: &dyn crate::Secrets, name: &str, p: &ProviderEntry) -> KeyView {
+    match (&p.key, &p.key_env) {
+        (Some(k), _) if k.starts_with(KEYCHAIN_PREFIX) => {
+            let account = &k[KEYCHAIN_PREFIX.len()..];
+            KeyView::Keychain { present: matches!(secrets.get(account), Ok(Some(_))) }
+        }
+        (Some(_), _) => KeyView::Refused {
+            reason: format!(
+                "config.toml has a key written into it for {name}. kizn only reads keys from the keychain \
+                     (key = \"{KEYCHAIN_PREFIX}{name}\") or an environment variable (key_env)."
+            ),
+        },
+        (None, Some(var)) => KeyView::Env { var: var.clone(), present: std::env::var_os(var).is_some() },
+        (None, None) => KeyView::None,
+    }
+}
+
+impl App {
     pub(crate) fn save_provider(
         &self,
         name: &str,
@@ -229,25 +239,6 @@ impl App {
         edit.save()?;
         self.settings()
     }
-
-    fn resolve_key(&self, name: &str, p: &ProviderEntry) -> Result<Option<String>, AppError> {
-        match self.key_view(name, p) {
-            KeyView::None => Ok(None),
-            KeyView::Refused { reason } => Err(AppError::Refused(reason)),
-            KeyView::Env { var, .. } => std::env::var(&var).map(Some).map_err(|_| {
-                AppError::Refused(format!("{name}'s key should be in the environment variable {var}, which isn't set"))
-            }),
-            KeyView::Keychain { .. } => {
-                let account = &p.key.as_deref().unwrap_or_default()[KEYCHAIN_PREFIX.len()..];
-                match self.deps.secrets.get(account).map_err(keychain_error)? {
-                    Some(k) => Ok(Some(k)),
-                    None => Err(AppError::Refused(format!(
-                        "{name}'s key isn't in the keychain any more. Add it again in Settings."
-                    ))),
-                }
-            }
-        }
-    }
 }
 
 /// What a provider can do, from its test: authoring and checking need JSON,
@@ -336,6 +327,40 @@ fn keychain_error(e: String) -> AppError {
         "couldn't use the system keychain ({e}). You can put the key in an environment variable instead and set key_env \
          in config.toml."
     ))
+}
+
+pub(crate) fn resolve_key(
+    secrets: &dyn crate::Secrets,
+    name: &str,
+    p: &ProviderEntry,
+) -> Result<Option<String>, AppError> {
+    match key_view(secrets, name, p) {
+        KeyView::None => Ok(None),
+        KeyView::Refused { reason } => Err(AppError::Refused(reason)),
+        KeyView::Env { var, .. } => std::env::var(&var).map(Some).map_err(|_| {
+            AppError::Refused(format!("{name}'s key should be in the environment variable {var}, which isn't set"))
+        }),
+        KeyView::Keychain { .. } => {
+            let account = &p.key.as_deref().unwrap_or_default()[KEYCHAIN_PREFIX.len()..];
+            match secrets.get(account).map_err(keychain_error)? {
+                Some(k) => Ok(Some(k)),
+                None => Err(AppError::Refused(format!(
+                    "{name}'s key isn't in the keychain any more. Add it again in Settings."
+                ))),
+            }
+        }
+    }
+}
+
+/// A provider's endpoint, its key resolved.
+pub(crate) fn endpoint(secrets: &dyn crate::Secrets, name: &str, p: &ProviderEntry) -> Result<Endpoint, AppError> {
+    Ok(Endpoint {
+        protocol: parse_protocol(&p.protocol)?,
+        base_url: base_url(p),
+        model: p.model.clone(),
+        headers: p.headers.clone().into_iter().collect(),
+        key: resolve_key(secrets, name, p)?,
+    })
 }
 
 #[cfg(test)]

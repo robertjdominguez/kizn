@@ -32,10 +32,17 @@ pub enum Behaviour {
     UnknownModel,
     /// Lists models, but refuses every request: no credit (Anthropic's 400).
     NoCredit,
+    /// Writes items as asked, but the first one's correct option is far
+    /// longer than the others (the longest-option cue).
+    LongestCue,
+    /// Answers blind checks with an option that isn't the key.
+    CheckerDisagrees,
+    /// Like `works`, but each kizn task takes a while (to watch it in dev).
+    Slow,
 }
 
 impl Behaviour {
-    pub const ALL: [Behaviour; 7] = [
+    pub const ALL: [Behaviour; 10] = [
         Behaviour::Works,
         Behaviour::PromptedJson,
         Behaviour::NoJson,
@@ -43,6 +50,9 @@ impl Behaviour {
         Behaviour::Unauthorized,
         Behaviour::UnknownModel,
         Behaviour::NoCredit,
+        Behaviour::LongestCue,
+        Behaviour::CheckerDisagrees,
+        Behaviour::Slow,
     ];
 
     pub fn name(self) -> &'static str {
@@ -54,6 +64,9 @@ impl Behaviour {
             Behaviour::Unauthorized => "unauthorized",
             Behaviour::UnknownModel => "unknown-model",
             Behaviour::NoCredit => "no-credit",
+            Behaviour::LongestCue => "longest-cue",
+            Behaviour::CheckerDisagrees => "checker-disagrees",
+            Behaviour::Slow => "slow",
         }
     }
 
@@ -66,6 +79,11 @@ impl Behaviour {
 pub struct FakeServer {
     addr: Option<SocketAddr>,
     hosts: Arc<Mutex<HashMap<String, Behaviour>>>,
+    /// The key of every item this server wrote, by stem: the blind check
+    /// answers from it.
+    keys: Arc<Mutex<HashMap<String, String>>>,
+    /// Varies what it writes, so stems don't repeat.
+    written: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl FakeServer {
@@ -131,14 +149,19 @@ async fn handle(
         return error(StatusCode::UNAUTHORIZED, "invalid api key");
     }
     let req: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+    let task = kizn_task(&req);
+    if task.is_some() && behaviour == Behaviour::Slow {
+        tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
+    }
+    let answer = task.and_then(|(task, input)| server.answer(task, &input, behaviour));
     match (method, rest.as_str()) {
         (Method::GET, "/v1/models") => axum::Json(json!({
             "object": "list",
             "data": [{"id": "fake-small"}, {"id": "fake-large"}, {"id": "qwen3:32b"}, {"id": "claude-sonnet-5"}]
         }))
         .into_response(),
-        (Method::POST, "/v1/chat/completions") => openai(behaviour, &req),
-        (Method::POST, "/v1/messages") => anthropic(behaviour, &req),
+        (Method::POST, "/v1/chat/completions") => openai(behaviour, &req, answer),
+        (Method::POST, "/v1/messages") => anthropic(behaviour, &req, answer),
         _ => error(StatusCode::NOT_FOUND, "no such route"),
     }
 }
@@ -162,7 +185,7 @@ fn asks_for_json(req: &Value) -> bool {
     req.to_string().contains("Reply with only a JSON object")
 }
 
-fn openai(b: Behaviour, req: &Value) -> Response {
+fn openai(b: Behaviour, req: &Value, answer: Option<Value>) -> Response {
     if b == Behaviour::NoCredit {
         return error(StatusCode::BAD_REQUEST, NO_CREDIT);
     }
@@ -179,11 +202,12 @@ fn openai(b: Behaviour, req: &Value) -> Response {
         return sse(events);
     }
     let schema = !req["response_format"].is_null();
+    let answer = answer.map(|a| a.to_string()).unwrap_or_else(|| ANSWER.to_string());
     let content = match (b, schema) {
         (Behaviour::PromptedJson, true) => return error(StatusCode::BAD_REQUEST, "response_format is not supported"),
         (Behaviour::NoJson, _) => PROSE.to_string(),
-        (_, true) => ANSWER.to_string(),
-        (_, false) if asks_for_json(req) => format!("Here you go:\n```json\n{ANSWER}\n```"),
+        (_, true) => answer,
+        (_, false) if asks_for_json(req) => format!("Here you go:\n```json\n{answer}\n```"),
         (_, false) => PROSE.to_string(),
     };
     axum::Json(json!({
@@ -193,7 +217,7 @@ fn openai(b: Behaviour, req: &Value) -> Response {
     .into_response()
 }
 
-fn anthropic(b: Behaviour, req: &Value) -> Response {
+fn anthropic(b: Behaviour, req: &Value, answer: Option<Value>) -> Response {
     if b == Behaviour::NoCredit {
         return error(StatusCode::BAD_REQUEST, NO_CREDIT);
     }
@@ -212,14 +236,206 @@ fn anthropic(b: Behaviour, req: &Value) -> Response {
         return sse(events);
     }
     let tools = !req["tools"].is_null();
+    let answer = answer.unwrap_or_else(|| json!({"ok": true, "word": "kizn"}));
     let content = match (b, tools) {
         (Behaviour::PromptedJson, true) => return error(StatusCode::BAD_REQUEST, "tools are not supported"),
         (Behaviour::NoJson, _) => json!([{"type": "text", "text": PROSE}]),
-        (_, true) => json!([{"type": "tool_use", "name": "reply", "input": {"ok": true, "word": "kizn"}}]),
-        (_, false) if asks_for_json(req) => json!([{"type": "text", "text": ANSWER}]),
+        (_, true) => json!([{"type": "tool_use", "name": "reply", "input": answer}]),
+        (_, false) if asks_for_json(req) => json!([{"type": "text", "text": answer.to_string()}]),
         (_, false) => json!([{"type": "text", "text": PROSE}]),
     };
     axum::Json(json!({"content": content, "usage": {"input_tokens": 20, "output_tokens": 8}})).into_response()
+}
+
+// ---- kizn's tasks ---------------------------------------------------------------
+//
+// kizn's prompts carry `kizn-task: <task>` in the system prompt and their
+// inputs as JSON between <input> and </input> in the user message. The fake
+// answers each with valid JSON built from those inputs.
+
+pub const TASK_MARKER: &str = "kizn-task:";
+
+fn kizn_task(req: &Value) -> Option<(String, Value)> {
+    let text = req.to_string();
+    let at = text.find(TASK_MARKER)? + TASK_MARKER.len();
+    let task: String = text[at..].trim_start().chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '-').collect();
+    // The user message, as text (OpenAI puts it in messages; Anthropic too).
+    let user = req["messages"]
+        .as_array()?
+        .iter()
+        .rev()
+        .find(|m| m["role"] == "user")
+        .and_then(|m| m["content"].as_str())?
+        .to_string();
+    let start = user.find("<input>")? + "<input>".len();
+    let end = user.find("</input>")?;
+    Some((task, serde_json::from_str(user[start..end].trim()).ok()?))
+}
+
+const VERBS: [(&str, &str); 5] = [
+    ("Explain", "understand"),
+    ("Diagnose", "analyze"),
+    ("Advise", "evaluate"),
+    ("Compare", "analyze"),
+    ("Design", "create"),
+];
+
+const STEMS: [&str; 6] = [
+    "Which statement about {c} is accurate?",
+    "A colleague asks you about {c}. What do you tell them?",
+    "During an incident review someone brings up {c}. Which point holds?",
+    "You are writing onboarding notes covering {c}. Which line belongs there?",
+    "A customer email raises {c}. Which reply gets it right?",
+    "In a design discussion touching {c}, which claim stands up?",
+];
+
+/// Varied settings, so stems written for the same concepts don't overlap.
+const CONTEXTS: [&str; 12] = [
+    "Picture a staging cluster after a Friday deploy.",
+    "Think of a laptop running a quick local test.",
+    "Imagine a nightly batch job on shared hardware.",
+    "Consider a payments service under heavy load.",
+    "Suppose an intern follows the runbook step by step.",
+    "Assume a regulated bank audits every release.",
+    "Take a startup moving fast with one engineer.",
+    "Envision a mirror registry behind a strict firewall.",
+    "Recall a rollback that happened mid-incident.",
+    "Visualise dashboards showing a sudden latency spike.",
+    "Consider vendors shipping images to many customers.",
+    "Imagine edge devices updating over flaky links.",
+];
+const AUDIENCES: [&str; 6] = [
+    "a new teammate",
+    "a customer's architect",
+    "a product manager",
+    "an auditor",
+    "a support engineer",
+    "a skeptical director",
+];
+const SITUATIONS: [&str; 5] = [
+    "has asked for a plain answer",
+    "is deciding whether to approve a release",
+    "is reading an incident report",
+    "is comparing two vendors",
+    "has five minutes before a meeting",
+];
+
+impl FakeServer {
+    fn next(&self) -> usize {
+        self.written.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    }
+
+    fn answer(&self, task: String, input: &Value, b: Behaviour) -> Option<Value> {
+        let s = |k: &str| input[k].as_str().unwrap_or("").to_string();
+        match task.as_str() {
+            "draft-outcomes" => {
+                let (title, goal) = (s("title"), s("goal"));
+                let outcomes: Vec<Value> = VERBS[..3]
+                    .iter()
+                    .enumerate()
+                    .map(|(i, (verb, tier))| {
+                        json!({
+                            "statement": format!("{verb} {} for the situations in your goal (part {})", title.to_lowercase(), i + 1),
+                            "tier": tier,
+                            "reason": format!("you said \"{goal}\""),
+                        })
+                    })
+                    .collect();
+                Some(json!({ "outcomes": outcomes }))
+            }
+            "draft-concepts" => {
+                let outcome = s("outcome");
+                let short: String = outcome.split_whitespace().skip(1).take(3).collect::<Vec<_>>().join(" ");
+                let concepts: Vec<Value> = ["what it is", "why it matters", "how it fails", "how to tell"]
+                    .iter()
+                    .map(|aspect| json!(format!("{short}: {aspect}")))
+                    .collect();
+                Some(json!({ "concepts": concepts }))
+            }
+            "write-items" => {
+                let kind = s("kind");
+                // "remember or understand": a real model picks one.
+                let tier = s("tier").rsplit(" or ").next().unwrap_or("understand").to_string();
+                let count = input["count"].as_u64().unwrap_or(1) as usize;
+                let concepts: Vec<String> = input["concepts"]
+                    .as_array()
+                    .map(|a| a.iter().filter_map(|c| c.as_str().map(str::to_string)).collect())
+                    .unwrap_or_default();
+                let named: Vec<String> = match input["slot_concept"].as_str() {
+                    Some(c) => vec![c.to_string()],
+                    None => concepts.iter().take(2).cloned().collect(),
+                };
+                let items: Vec<Value> = (0..count)
+                    .map(|i| {
+                        let n = self.next();
+                        let about = named.join(" and ");
+                        if kind == "explain" {
+                            return json!({
+                                "concepts": named,
+                                "stem": format!("Explain {about} to {} who {}.", AUDIENCES[n % AUDIENCES.len()], SITUATIONS[(n / AUDIENCES.len()) % SITUATIONS.len()]),
+                                "exemplar": format!("A strong answer names {about}, says why it matters in practice, and gives one concrete example."),
+                                "source": "",
+                                "model_knowledge": true,
+                            });
+                        }
+                        let stem = format!(
+                            "{} {}",
+                            CONTEXTS[(n + n / STEMS.len()) % CONTEXTS.len()],
+                            STEMS[n % STEMS.len()].replace("{c}", &about)
+                        );
+                        let key = if b == Behaviour::LongestCue && i == 0 {
+                            "This is how it works in practice, every time, on every host, whatever the registry or tag says about it"
+                        } else {
+                            "This is how it works in practice"
+                        };
+                        self.keys.lock().unwrap().insert(stem.clone(), key.to_string());
+                        json!({
+                            "concepts": named,
+                            "tier": tier,
+                            "stem": stem,
+                            "options": [
+                                {"text": key, "correct": true, "why": "it matches the concept as stated"},
+                                {"text": "This only applies on the first run", "correct": false, "why": "nothing limits it to the first run", "misconception": "it happens once", "foundation": "none"},
+                                {"text": "This depends on the host's clock", "correct": false, "why": "time plays no part here", "misconception": "it is time-based", "foundation": "none"},
+                            ],
+                            "source": "",
+                            "model_knowledge": true,
+                        })
+                    })
+                    .collect();
+                Some(json!({ "items": items }))
+            }
+            "blind-check" => {
+                let stem = s("stem");
+                let options: Vec<String> = input["options"]
+                    .as_array()
+                    .map(|a| a.iter().filter_map(|o| o.as_str().map(str::to_string)).collect())
+                    .unwrap_or_default();
+                let key = self.keys.lock().unwrap().get(&stem).cloned();
+                // Options arrive as "A. text".
+                let letter_of = |want: &str| {
+                    options
+                        .iter()
+                        .find(|o| o.get(3..) == Some(want))
+                        .and_then(|o| o.chars().next())
+                        .map(|c| c.to_string())
+                };
+                let right = key.as_deref().and_then(letter_of).unwrap_or_else(|| "A".into());
+                let pick = if b == Behaviour::CheckerDisagrees {
+                    options
+                        .iter()
+                        .filter_map(|o| o.chars().next())
+                        .map(|c| c.to_string())
+                        .find(|l| *l != right)
+                        .unwrap_or(right)
+                } else {
+                    right
+                };
+                Some(json!({ "pick": pick, "also_defensible": [] }))
+            }
+            _ => None,
+        }
+    }
 }
 
 #[cfg(test)]

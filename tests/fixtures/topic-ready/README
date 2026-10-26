@@ -1,0 +1,2 @@
+Every outcome's bank is written: practice is ready.
+Use with `just dev mock paused`, so the bank writer leaves it as seeded.

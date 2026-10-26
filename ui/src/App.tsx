@@ -1,9 +1,13 @@
 import { Info, Monitor, Moon, Sun } from "lucide-react";
+import { AnimatePresence, motion } from "motion/react";
 import { useCallback, useEffect, useState } from "react";
 import { About } from "./about/About";
+import { fade, presence } from "./motion";
 import { Settings } from "./settings/Settings";
 import { applyTheme, loadTheme, type ThemeChoice } from "./theme/theme";
 import { Today } from "./today/Today";
+import { Setup } from "./topic/Setup";
+import { TopicPage } from "./topic/TopicPage";
 
 const THEMES: { value: ThemeChoice; label: string; Icon: typeof Sun }[] = [
   { value: "system", label: "Follow the system", Icon: Monitor },
@@ -36,9 +40,23 @@ function ThemeToggle() {
   );
 }
 
-// Screens by URL hash (#/settings), so a reload or hot reload stays put.
-type View = "today" | "settings";
-const viewFromHash = (): View => (window.location.hash === "#/settings" ? "settings" : "today");
+// Screens by URL hash (#/settings, #/topic/<id>), so a reload or hot reload
+// stays put.
+type View = { name: "today" } | { name: "settings" } | { name: "topic"; id: string } | { name: "setup"; id?: string };
+const viewFromHash = (): View => {
+  const h = window.location.hash;
+  if (h === "#/settings") return { name: "settings" };
+  if (h === "#/new-topic") return { name: "setup" };
+  const setup = h.match(/^#\/setup\/(.+)$/);
+  if (setup?.[1]) return { name: "setup", id: decodeURIComponent(setup[1]) };
+  const topic = h.match(/^#\/topic\/(.+)$/);
+  if (topic?.[1]) return { name: "topic", id: decodeURIComponent(topic[1]) };
+  return { name: "today" };
+};
+
+// Topics live under Today in the nav.
+const current = (v: View) => (v.name === "settings" ? "settings" : "today");
+const viewKey = (v: View) => (v.name === "topic" ? `topic-${v.id}` : v.name === "setup" ? "setup" : v.name);
 
 export function App() {
   const [view, setView] = useState<View>(viewFromHash);
@@ -58,8 +76,8 @@ export function App() {
             <a
               key={v}
               href={v === "today" ? "#/" : "#/settings"}
-              aria-current={view === v ? "page" : undefined}
-              className={`rounded-md px-2 py-1 text-sm capitalize transition-colors ${view === v ? "bg-raised/60 text-ink" : "text-ink-3 hover:text-ink"}`}
+              aria-current={current(view) === v ? "page" : undefined}
+              className={`rounded-md px-2 py-1 text-sm capitalize transition-colors ${current(view) === v ? "bg-raised/60 text-ink" : "text-ink-3 hover:text-ink"}`}
             >
               {v}
             </a>
@@ -77,7 +95,16 @@ export function App() {
           <Info size={14} aria-hidden />
         </button>
       </header>
-      <main className="min-h-0 flex-1 overflow-auto">{view === "today" ? <Today /> : <Settings />}</main>
+      <main className="min-h-0 flex-1 overflow-auto">
+        <AnimatePresence mode="wait">
+          <motion.div key={viewKey(view)} variants={fade} {...presence}>
+            {view.name === "today" && <Today />}
+            {view.name === "settings" && <Settings />}
+            {view.name === "topic" && <TopicPage topicId={view.id} />}
+            {view.name === "setup" && <Setup topicId={view.id} />}
+          </motion.div>
+        </AnimatePresence>
+      </main>
       <About open={about} onClose={closeAbout} />
     </div>
   );
