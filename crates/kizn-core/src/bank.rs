@@ -122,6 +122,65 @@ pub fn bank_needs(
         .collect()
 }
 
+/// One outcome's bank, as far as deciding what to write next goes.
+pub struct OutcomeBank<'a> {
+    pub target: Tier,
+    pub concept_ids: &'a [String],
+    pub active: Vec<BankedItem<'a>>,
+    pub attempted: &'a HashSet<String>,
+}
+
+/// What to write next across a topic's outcomes (in their order), in the
+/// order the learner will need it: outcome 1's placement (one recall per
+/// concept: the first set), a second recall on each of its concepts (Day 3
+/// needs a different question), the other outcomes' placement and second
+/// recall, then every recall slot to full, then "use it", target and explain
+/// questions. Returns the outcome's index, the slot and how many to write.
+pub fn next_need(outcomes: &[OutcomeBank]) -> Option<(usize, Slot, usize)> {
+    let in_slot = |o: &OutcomeBank, concept: &String| {
+        o.active.iter().filter(|i| i.kind == ItemKind::Recall && i.concept_ids.first() == Some(concept)).count()
+    };
+    // Recall up to a level: first outcome 1, then the rest.
+    let order: Vec<usize> = (0..outcomes.len()).collect();
+    let passes: [(&[usize], usize); 4] = [
+        (&order[..order.len().min(1)], 1),
+        (&order[..order.len().min(1)], 2),
+        (&order[order.len().min(1)..], 1),
+        (&order[order.len().min(1)..], 2),
+    ];
+    for (which, level) in passes {
+        for &i in which {
+            let o = &outcomes[i];
+            for c in o.concept_ids {
+                let have = in_slot(o, c);
+                if have < level {
+                    return Some((i, Slot { kind: ItemKind::Recall, concept_id: Some(c.clone()) }, level - have));
+                }
+            }
+        }
+    }
+    // Then by kind, outcome by outcome: the rest of recall, use it, target, explain.
+    for kind in [ItemKind::Recall, ItemKind::Apply, ItemKind::Target, ItemKind::Explain] {
+        for (i, o) in outcomes.iter().enumerate() {
+            if let Some((slot, n)) =
+                bank_needs(o.target, o.concept_ids, &o.active, o.attempted).into_iter().find(|(s, _)| s.kind == kind)
+            {
+                return Some((i, slot, n));
+            }
+        }
+    }
+    None
+}
+
+/// Whether an outcome's first set can be offered: one recall question on
+/// every concept.
+pub fn placement_ready(concept_ids: &[String], active: &[BankedItem]) -> bool {
+    !concept_ids.is_empty()
+        && concept_ids
+            .iter()
+            .all(|c| active.iter().any(|i| i.kind == ItemKind::Recall && i.concept_ids.first() == Some(c)))
+}
+
 /// The total an outcome's bank holds when full, for "N of ~M items ready".
 pub fn bank_size(target: Tier, concepts: usize) -> usize {
     concepts * ItemKind::Recall.slot_size()
@@ -685,6 +744,41 @@ mod tests {
         four.push(BankedItem { id: "i3", kind: ItemKind::Recall, concept_ids: &concept });
         let needs = bank_needs(Tier::Understand, &concepts, &four, &attempted);
         assert!(needs.iter().all(|(s, _)| s.kind != ItemKind::Recall), "two unseen of four: no refill yet");
+    }
+
+    #[test]
+    fn questions_are_written_in_the_order_theyll_be_needed() {
+        let a = vec!["a1".to_string(), "a2".to_string()];
+        let b = vec!["b1".to_string()];
+        let none = HashSet::new();
+        let bank = |concepts: &'static [String], active: Vec<BankedItem<'static>>| OutcomeBank {
+            target: Tier::Evaluate,
+            concept_ids: concepts,
+            active,
+            attempted: Box::leak(Box::new(none.clone())),
+        };
+        let a: &'static [String] = Box::leak(a.into_boxed_slice());
+        let b: &'static [String] = Box::leak(b.into_boxed_slice());
+        let rec = |c: &'static [String], i: usize| BankedItem {
+            id: Box::leak(format!("{}-{i}", c[0]).into_boxed_str()),
+            kind: ItemKind::Recall,
+            concept_ids: &c[..1],
+        };
+        // Nothing yet: outcome 1's first concept, one question.
+        let (i, slot, n) = next_need(&[bank(a, vec![]), bank(b, vec![])]).unwrap();
+        assert_eq!((i, slot.concept_id.as_deref(), n), (0, Some("a1"), 1));
+        // Outcome 1 has placement on a1 only: a2 next.
+        let (i, slot, _) = next_need(&[bank(a, vec![rec(a, 0)]), bank(b, vec![])]).unwrap();
+        assert_eq!((i, slot.concept_id.as_deref()), (0, Some("a2")));
+        assert!(!placement_ready(a, &[rec(a, 0)]));
+        // Outcome 1 placement done: second recall on outcome 1 before outcome 2's placement.
+        let a2 = BankedItem { id: "a2-0", kind: ItemKind::Recall, concept_ids: &a[1..2] };
+        let (i, slot, _) = next_need(&[bank(a, vec![rec(a, 0), a2]), bank(b, vec![])]).unwrap();
+        assert_eq!((i, slot.concept_id.as_deref()), (0, Some("a1")));
+        assert!(placement_ready(
+            a,
+            &[rec(a, 0), BankedItem { id: "x", kind: ItemKind::Recall, concept_ids: &a[1..2] }]
+        ));
     }
 
     #[test]

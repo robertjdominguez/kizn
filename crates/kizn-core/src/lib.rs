@@ -5,7 +5,9 @@
 
 pub mod bank;
 pub mod clock;
+pub mod deck;
 pub mod id;
+pub mod progress;
 pub mod rng;
 pub mod tier;
 
