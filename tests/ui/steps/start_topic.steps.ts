@@ -106,29 +106,23 @@ When("I confirm the topic", async ({ page }) => {
   await page.getByRole("button", { name: "Continue" }).click();
   await expect(page.getByRole("heading", { name: "Ready to prepare your practice?" })).toBeVisible();
   await page.getByRole("button", { name: "Confirm" }).click();
-  await expect(page.getByRole("heading", { name: "What you'll be able to do" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Your concepts" })).toBeVisible();
 });
 
 Then("bank writing is queued for each outcome", async ({ page }) => {
-  await expect(page.getByText("Preparing")).toBeVisible();
-  await expect(page.getByText("An image is immutable layers plus config")).toHaveCount(0); // concepts start collapsed
+  await expect(page.getByText("Questions ready")).toBeVisible();
 });
 
-Then("the topic page shows {string} on each outcome", async ({ page }, text: string) => {
-  expect(text).toBe("writing items");
-  const rows = page.getByRole("region", { name: "What you'll be able to do" }).locator(":scope > ol > li");
-  const n = await rows.count();
-  expect(n).toBeGreaterThan(0);
-  for (let i = 0; i < n; i++) {
-    await expect(rows.nth(i)).toContainText(/Writing…|Waiting its turn/);
-  }
+Then("the topic page says its questions are being written", async ({ page }) => {
+  await expect(page.getByRole("region", { name: "Next up" })).toContainText(/Writing your first questions|ready/i);
+  await expect(page.getByText("Questions ready")).toBeVisible();
 });
 
 Given("a confirmed topic whose bank is being written", async ({ page, world }) => {
   await startTopic(page, world, "Container fundamentals", "explain to customers why deployments behave differently");
   await page.getByRole("button", { name: "Continue" }).click();
   await page.getByRole("button", { name: "Confirm" }).click();
-  await expect(page.getByRole("heading", { name: "What you'll be able to do" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Your concepts" })).toBeVisible();
 });
 
 When("I open Today", async ({ page }) => {
@@ -136,7 +130,8 @@ When("I open Today", async ({ page }) => {
 });
 
 Then("I see the topic as preparing", async ({ page }) => {
-  await expect(page.getByRole("link", { name: /Container fundamentals/ })).toContainText("Preparing");
+  const card = page.getByRole("link", { name: /Container fundamentals/ });
+  await expect(card.getByRole("progressbar", { name: "Questions being written" })).toBeVisible();
 });
 
 When("every outcome has items", async ({ world }) => {
@@ -145,5 +140,7 @@ When("every outcome has items", async ({ world }) => {
 });
 
 Then("I see the topic as ready", async ({ page }) => {
-  await expect(page.getByRole("link", { name: /Container fundamentals/ })).toContainText("Ready", { timeout: 90_000 });
+  const card = page.getByRole("link", { name: /Container fundamentals/ });
+  await expect(card).toContainText("Ready to start", { timeout: 90_000 });
+  await expect(card.getByRole("progressbar")).toHaveCount(0, { timeout: 90_000 });
 });

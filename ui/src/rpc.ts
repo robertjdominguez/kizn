@@ -29,6 +29,13 @@ const REPLY = {
   confirm_topic: "topic",
   get_topic: "topic",
   retry_bank: "topic",
+  start_practice: "deck",
+  answer: "answered",
+  get_summary: "summary",
+  get_progress: "progress",
+  get_concept: "concept",
+  find_sources: "concept",
+  mark_studied: "concept",
 } as const satisfies Record<Command["type"], Reply["type"]>;
 
 type ReplyData<T extends Reply["type"]> = Extract<Reply, { type: T }>["data"];

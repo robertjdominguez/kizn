@@ -63,6 +63,35 @@ pub struct ItemRow {
     pub created_at: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AttemptRow {
+    pub id: String,
+    pub topic_id: String,
+    pub outcome_id: String,
+    pub item_id: String,
+    /// The stored options' indices, in the order they were shown.
+    pub order: Vec<usize>,
+    /// Index into the stored options.
+    pub chosen: usize,
+    pub correct: bool,
+    pub at: String,
+    pub disputed_at: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceRow {
+    pub id: String,
+    pub concept_id: String,
+    pub url: String,
+    pub title: String,
+    pub why: Option<String>,
+    /// verified | rejected | failed
+    pub status: String,
+    pub reason: Option<String>,
+    pub words: Option<i64>,
+    pub checked_at: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct BatchCounts {
     pub asked: i64,
@@ -232,6 +261,15 @@ impl Store {
         Ok(())
     }
 
+    pub fn concept(&self, id: &str) -> Result<Option<ConceptRow>> {
+        let conn = self.conn.lock().unwrap();
+        Ok(conn
+            .query_row("SELECT id, outcome_id, ord, statement FROM concepts WHERE id = ?1", [id], |r| {
+                Ok(ConceptRow { id: r.get(0)?, outcome_id: r.get(1)?, ord: r.get(2)?, statement: r.get(3)? })
+            })
+            .optional()?)
+    }
+
     pub fn concepts(&self, outcome_id: &str) -> Result<Vec<ConceptRow>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt =
@@ -317,6 +355,100 @@ impl Store {
             "SELECT outcome_id, count(*) FROM items WHERE topic_id = ?1 AND status = 'active' GROUP BY outcome_id",
         )?;
         Ok(stmt.query_map([topic_id], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?)
+    }
+
+    pub fn item(&self, id: &str) -> Result<Option<ItemRow>> {
+        let conn = self.conn.lock().unwrap();
+        Ok(conn.query_row(&format!("SELECT {ITEM_COLS} FROM items WHERE id = ?1"), [id], item).optional()?)
+    }
+
+    pub fn insert_attempt(&self, a: &AttemptRow) -> Result<()> {
+        self.conn.lock().unwrap().execute(
+            "INSERT INTO attempts (id, topic_id, outcome_id, item_id, order_json, chosen, correct, at, disputed_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                a.id,
+                a.topic_id,
+                a.outcome_id,
+                a.item_id,
+                serde_json::to_string(&a.order).expect("an order serialises"),
+                a.chosen as i64,
+                a.correct as i64,
+                a.at,
+                a.disputed_at
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Every answer, oldest first; or one topic's.
+    pub fn attempts(&self, topic_id: Option<&str>) -> Result<Vec<AttemptRow>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, topic_id, outcome_id, item_id, order_json, chosen, correct, at, disputed_at FROM attempts
+             WHERE ?1 IS NULL OR topic_id = ?1 ORDER BY at, id",
+        )?;
+        let rows = stmt.query_map([topic_id], |r| {
+            let order: String = r.get(4)?;
+            Ok(AttemptRow {
+                id: r.get(0)?,
+                topic_id: r.get(1)?,
+                outcome_id: r.get(2)?,
+                item_id: r.get(3)?,
+                order: serde_json::from_str(&order).unwrap_or_default(),
+                chosen: r.get::<_, i64>(5)? as usize,
+                correct: r.get::<_, i64>(6)? != 0,
+                at: r.get(7)?,
+                disputed_at: r.get(8)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    pub fn insert_source(&self, s: &SourceRow) -> Result<()> {
+        self.conn.lock().unwrap().execute(
+            "INSERT INTO sources (id, concept_id, url, title, why, status, reason, words, checked_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![s.id, s.concept_id, s.url, s.title, s.why, s.status, s.reason, s.words, s.checked_at],
+        )?;
+        Ok(())
+    }
+
+    /// A concept's sources, oldest first: every one checked, whatever came of it.
+    pub fn sources(&self, concept_id: &str) -> Result<Vec<SourceRow>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, concept_id, url, title, why, status, reason, words, checked_at FROM sources
+             WHERE concept_id = ?1 ORDER BY checked_at, rowid",
+        )?;
+        let rows = stmt.query_map([concept_id], |r| {
+            Ok(SourceRow {
+                id: r.get(0)?,
+                concept_id: r.get(1)?,
+                url: r.get(2)?,
+                title: r.get(3)?,
+                why: r.get(4)?,
+                status: r.get(5)?,
+                reason: r.get(6)?,
+                words: r.get(7)?,
+                checked_at: r.get(8)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    pub fn mark_studied(&self, concept_id: &str, at: &str) -> Result<()> {
+        self.conn.lock().unwrap().execute(
+            "INSERT INTO studied (concept_id, at) VALUES (?1, ?2) ON CONFLICT (concept_id) DO UPDATE SET at = ?2",
+            params![concept_id, at],
+        )?;
+        Ok(())
+    }
+
+    /// When a concept was marked studied, if it was.
+    pub fn studied_at(&self, concept_id: &str) -> Result<Option<String>> {
+        let conn = self.conn.lock().unwrap();
+        Ok(conn.query_row("SELECT at FROM studied WHERE concept_id = ?1", [concept_id], |r| r.get(0)).optional()?)
     }
 
     pub fn start_batch(&self, id: &str, outcome_id: &str, provider: &str, now: &str) -> Result<()> {

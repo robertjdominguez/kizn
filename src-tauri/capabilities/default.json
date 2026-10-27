@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "The main window: core, plus opening the provider sites Settings links to. No shell, no filesystem; kizn-app does IO behind the rpc command.",
+  "description": "The main window: core, plus opening links in the browser: the provider sites Settings links to, and study sources (any https page; the UI only lists sources kizn fetched and verified). No shell, no filesystem; kizn-app does IO behind the rpc command.",
   "windows": [
     "main"
   ],
@@ -33,6 +33,9 @@
         },
         {
           "url": "https://github.com/robertjdominguez/kizn/*"
+        },
+        {
+          "url": "https://*"
         }
       ]
     }

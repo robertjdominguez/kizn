@@ -3,6 +3,7 @@
 
 # Local dev data (KIZN_DATA_DIR in `just dev`)
 /.kizn-dev/
+/.kizn-demo/
 
 # Rust
 /target/

@@ -22,6 +22,9 @@ const testDir = defineBddConfig({
   steps: "steps/**/*.ts",
   featuresRoot: join(root, "features"),
   tags: `@ui${tag}`,
+  // Mid-phase, KIZN_BDD_MISSING=skip runs what has steps; CI always fails on a
+  // scenario without them.
+  missingSteps: process.env.KIZN_BDD_MISSING === "skip" && !process.env.CI ? "skip-scenario" : "fail-on-gen",
 });
 
 export default defineConfig({

@@ -5,6 +5,7 @@ import type { CheckView } from "../bindings/CheckView";
 import type { KeyView } from "../bindings/KeyView";
 import type { ProviderView } from "../bindings/ProviderView";
 import type { Role } from "../bindings/Role";
+import { Screen } from "../components/Screen";
 import { subscribe } from "../events";
 import { presence, rise } from "../motion";
 import { call, type SettingsView } from "../rpc";
@@ -66,11 +67,15 @@ export function Settings() {
   }, [firstRun, wizard]);
 
   if (!view) {
-    return error ? <p className="p-6 text-sm text-danger">Couldn't load Settings: {error}</p> : null;
+    return error ? (
+      <Screen>
+        <p className="text-sm text-danger">Couldn't load Settings: {error}</p>
+      </Screen>
+    ) : null;
   }
 
   return (
-    <div className="mx-auto flex w-full max-w-3xl flex-col gap-8 px-6 py-8">
+    <Screen>
       <section aria-labelledby="models-title" className="flex flex-col gap-4">
         <h2 id="models-title" className="sr-only">
           Models
@@ -210,7 +215,7 @@ export function Settings() {
           </section>
         </details>
       )}
-    </div>
+    </Screen>
   );
 }
 

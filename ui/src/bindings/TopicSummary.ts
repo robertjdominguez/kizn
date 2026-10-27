@@ -4,4 +4,8 @@ export type TopicSummary = { id: string, title: string, status: string,
 /**
  * Some outcome's bank isn't ready yet.
  */
-preparing: boolean, outcomes: number, concepts: number, active: number, expected: number, };
+preparing: boolean, outcomes: number, concepts: number, active: number, expected: number, 
+/**
+ * Every concept's state, outcome by outcome: the topic card's marks.
+ */
+states: Array<string>, due_now: number, new_now: number, practised: boolean, next_due_in_days: number | null, };

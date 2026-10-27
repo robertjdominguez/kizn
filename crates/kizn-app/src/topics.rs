@@ -327,13 +327,18 @@ impl App {
     pub(crate) fn topic_view(&self, topic_id: &str) -> Result<TopicView, AppError> {
         let topic = self.store.topic(topic_id)?.ok_or_else(|| AppError::Refused("there's no such topic".into()))?;
         let active = self.store.active_counts(&topic.id)?;
+        let standings = if topic.status == "confirmed" { self.standings(&topic.id)? } else { Default::default() };
         let mut outcomes = vec![];
         for o in self.store.outcomes(&topic.id)? {
             let concepts: Vec<ConceptView> = self
                 .store
                 .concepts(&o.id)?
                 .into_iter()
-                .map(|c| ConceptView { id: c.id, statement: c.statement })
+                .map(|c| {
+                    let state = standings.get(&c.id).map(|s| s.state.name()).unwrap_or("unseen").to_string();
+                    let studied = self.store.studied_at(&c.id).ok().flatten().is_some();
+                    ConceptView { id: c.id, statement: c.statement, state, studied }
+                })
                 .collect();
             let tier = Tier::parse(&o.target_tier).unwrap_or(Tier::Understand);
             let n = active.iter().find(|(id, _)| *id == o.id).map(|(_, n)| *n).unwrap_or(0);
@@ -377,7 +382,14 @@ impl App {
                 slots,
             });
         }
+        let p = if topic.status == "confirmed" { self.practice_state(&topic.id)? } else { Default::default() };
         Ok(TopicView {
+            can_practise: p.due + p.new > 0,
+            practised: p.practised,
+            next_due_in_days: p.next_due_in_days,
+            due_now: p.due,
+            new_now: p.new,
+            new_outcome_ord: p.new_outcome_ord,
             active: outcomes.iter().map(|o| o.active).sum(),
             expected: outcomes.iter().map(|o| o.expected).sum(),
             id: topic.id,
@@ -403,6 +415,11 @@ impl App {
                 concepts: v.outcomes.iter().map(|o| o.concepts.len() as i64).sum(),
                 active: v.active,
                 expected: v.expected,
+                states: v.outcomes.iter().flat_map(|o| o.concepts.iter().map(|c| c.state.clone())).collect(),
+                due_now: v.due_now,
+                new_now: v.new_now,
+                practised: v.practised,
+                next_due_in_days: v.next_due_in_days,
             });
         }
         Ok(out)

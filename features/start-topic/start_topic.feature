@@ -19,7 +19,7 @@ Feature: Start a topic
     When I rename a concept, delete an outcome and change a target to "judge and recommend"
     And I confirm the topic
     Then bank writing is queued for each outcome
-    And the topic page shows "writing items" on each outcome
+    And the topic page says its questions are being written
 
   @domain
   Scenario: An item that fails a check is never shown

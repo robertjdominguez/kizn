@@ -14,6 +14,24 @@ status: string,
  */
 draft_state: string, draft_error: string | null, outcomes: Array<OutcomeView>, 
 /**
+ * A practice set can be built now (placement or due recalls).
+ */
+can_practise: boolean, 
+/**
+ * The topic has been practised before (its first set is done or begun).
+ */
+practised: boolean, 
+/**
+ * When nothing can be practised now: days until the next recall
+ * (rounded up; 1 is tomorrow).
+ */
+next_due_in_days: number | null, 
+/**
+ * What this topic's next set holds: recalls due, and new concepts (a
+ * starting point) on outcome `new_outcome_ord`.
+ */
+due_now: number, new_now: number, new_outcome_ord: number | null, 
+/**
  * Active items across the topic, and what a full bank holds.
  */
 active: number, expected: number, };

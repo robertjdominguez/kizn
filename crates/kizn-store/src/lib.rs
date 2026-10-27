@@ -15,6 +15,8 @@ const MIGRATIONS: &[&str] = &[
     include_str!("../migrations/0001_init.sql"),
     include_str!("../migrations/0002_provider_checks.sql"),
     include_str!("../migrations/0003_topics_and_bank.sql"),
+    include_str!("../migrations/0004_attempts.sql"),
+    include_str!("../migrations/0005_sources.sql"),
 ];
 
 pub const SCHEMA_VERSION: u32 = MIGRATIONS.len() as u32;
@@ -29,7 +31,7 @@ pub enum StoreError {
 
 pub type Result<T> = std::result::Result<T, StoreError>;
 
-pub use topics::{BatchCounts, ConceptRow, ItemRow, OutcomeRow, TopicRow};
+pub use topics::{AttemptRow, BatchCounts, ConceptRow, ItemRow, OutcomeRow, SourceRow, TopicRow};
 
 /// What's in a database file, read-only: for `just inspect db`.
 pub struct Inspection {
@@ -160,7 +162,20 @@ mod tests {
         let i = inspect(&path).unwrap();
         assert_eq!(i.schema_version, SCHEMA_VERSION);
         let names: Vec<&str> = i.tables.iter().map(|(n, _)| n.as_str()).collect();
-        assert_eq!(names, vec!["concepts", "item_batches", "items", "outcomes", "provider_checks", "topics"]);
+        assert_eq!(
+            names,
+            vec![
+                "attempts",
+                "concepts",
+                "item_batches",
+                "items",
+                "outcomes",
+                "provider_checks",
+                "sources",
+                "studied",
+                "topics"
+            ]
+        );
     }
 
     #[test]

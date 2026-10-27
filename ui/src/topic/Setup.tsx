@@ -19,6 +19,7 @@ import { AnimatePresence, motion } from "motion/react";
 import { type FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { Progress, type ProgressStep } from "../components/Progress";
 import { Reveal } from "../components/Reveal";
+import { Screen } from "../components/Screen";
 import { subscribe } from "../events";
 import { settingsCanFix } from "../fixable";
 import { EASE, presence, rise } from "../motion";
@@ -73,10 +74,7 @@ export function Setup({ topicId }: { topicId?: string }) {
   }, [topicId, drafting]);
 
   return (
-    <div
-      className={`mx-auto flex w-full flex-col gap-5 px-6 py-8 transition-[max-width] duration-300 ${step === 2 ? "max-w-3xl" : "max-w-2xl"}`}
-    >
-      <Progress steps={STEPS} index={step} />
+    <Screen width={step === 2 ? "max-w-3xl" : "max-w-2xl"} header={<Progress steps={STEPS} index={step} />}>
       <Reveal when={error}>
         <p className="text-sm text-danger">{error}</p>
       </Reveal>
@@ -95,7 +93,7 @@ export function Setup({ topicId }: { topicId?: string }) {
           {step === 3 && topic && <ConfirmStep topic={topic} onBack={() => setStep(2)} />}
         </motion.div>
       </AnimatePresence>
-    </div>
+    </Screen>
   );
 }
 

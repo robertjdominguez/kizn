@@ -11,6 +11,7 @@ publish = false
 workspace = true
 
 [dependencies]
+chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 axum = "0.8.9"
 futures-util = "0.3.34"
 kizn-app = { path = "../kizn-app" }
