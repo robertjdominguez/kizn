@@ -41,7 +41,10 @@ impl Ctx {
             .store
             .suggestions(Some(topic_id))?
             .into_iter()
-            .filter(|s| s.topic_id.is_none() && matches!(s.status.as_str(), "kept" | "later" | "dismissed" | "started"))
+            .filter(|s| {
+                s.topic_id.is_none()
+                    && matches!(s.status.as_str(), "kept" | "solid" | "later" | "dismissed" | "started")
+            })
             .filter(|s| s.source == "draft")
             .collect())
     }
@@ -191,6 +194,19 @@ impl Ctx {
         }
         let picked = order_shown[chosen as usize] as usize;
         self.store.answer_ground(item_id, picked, opts[picked].correct, &self.now())?;
+        // The last answer decides, and the evidence sets the default: a shaky
+        // foundation goes on the map to start with, a solid one stays off it.
+        // The learner can change either from the check or the map.
+        if s.status == "kept" {
+            let items = self.store.ground_items(&s.id)?;
+            let answered = items.iter().filter(|g| g.answer.is_some()).count();
+            let correct = items.iter().filter(|g| g.answer.is_some_and(|(_, c)| c)).count();
+            match result(answered, correct, items.len()) {
+                Some("shaky") => self.store.set_suggestion(&s.id, "later", None)?,
+                Some(_) => self.store.set_suggestion(&s.id, "solid", None)?,
+                None => {}
+            }
+        }
         self.changed(&s.for_topic);
         self.ground_view(&s.for_topic)
     }

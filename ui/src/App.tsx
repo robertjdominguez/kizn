@@ -64,9 +64,16 @@ const viewFromHash = (): View => {
   if (setup?.[1]) return { name: "setup", id: decodeURIComponent(setup[1]) };
   if (h === "#/practice") return { name: "practice" };
   if (h === "#/map") {
-    const title = q.get("added");
+    // From a flag: added=<title> (and node=<topic> when a topic you have was
+    // linked); from a check: arrived=<id>,<id>.
     const under = q.get("under");
-    return { name: "map", added: title && under ? { title, under, node: q.get("node") ?? undefined } : undefined };
+    const nodes = [...(q.get("arrived")?.split(",") ?? []), ...(q.get("node") ? [q.get("node") as string] : [])];
+    const title = q.get("added") ?? undefined;
+    const from = q.get("from") === "check" ? "check" : "flag";
+    return {
+      name: "map",
+      added: under && (title || nodes.length) ? { under, title, nodes: nodes.filter(Boolean), from } : undefined,
+    };
   }
   const check = h.match(/^#\/check\/(.+)$/);
   if (check?.[1]) return { name: "check", id: decodeURIComponent(check[1]) };

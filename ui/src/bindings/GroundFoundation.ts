@@ -3,7 +3,9 @@ import type { GroundQuestion } from "./GroundQuestion";
 
 export type GroundFoundation = { suggestion_id: string, title: string, why: string | null, 
 /**
- * The suggestion's status ("kept", "later", "dismissed", "started").
+ * The suggestion's status: "kept" (not checked yet), "solid" (checked,
+ * nothing to do), "later" (on the map to start with; a shaky one's
+ * default), "dismissed" or "started".
  */
 status: string, 
 /**

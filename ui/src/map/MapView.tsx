@@ -1,10 +1,11 @@
 import { ArrowDown, ArrowRight, ArrowUp, Layers, Play, X } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { MapEdge } from "../bindings/MapEdge";
 import type { MapNode } from "../bindings/MapNode";
 import type { MapView as MapData } from "../bindings/MapView";
 import { Screen } from "../components/Screen";
+import { Toast } from "../components/Toast";
 import { subscribe } from "../events";
 import { BOUNCY, EASE, GLIDE, pop } from "../motion";
 import { call } from "../rpc";
@@ -125,22 +126,52 @@ const IN_ROW = 0.1;
 const LINE = 0.6;
 
 /** What was just added, to hold back until the rest of the map has arrived:
- *  a new suggestion (with its link), or only the link to a topic you have. */
-export type Added = { title: string; under: string; node?: string };
+ *  new suggestions (with their links), or only the link to a topic you have.
+ *  Named by node id, or (from a flag) by title; all of them under `under`.
+ *  From a check, they're where to start. */
+export type Added = { under: string; nodes?: string[]; title?: string; from?: "check" | "flag" };
 
-function heldBack(map: MapData, added: Added): { nodes: Set<string>; edges: Set<string> } | null {
-  const title = added.title.toLowerCase();
-  const edge = map.edges.find((e) => {
-    if (e.upper !== added.under) return false;
-    if (added.node) return e.lower === added.node;
-    return map.nodes.find((n) => n.id === e.lower)?.title.toLowerCase() === title;
-  });
-  if (!edge) return null;
-  const lower = map.nodes.find((n) => n.id === edge.lower);
-  const alone = map.edges.filter((e) => e.lower === edge.lower || e.upper === edge.lower).length === 1;
-  return lower?.kind === "suggestion" && alone
-    ? { nodes: new Set([lower.id]), edges: new Set([edgeKey(edge)]) }
-    : { nodes: new Set(), edges: new Set([edgeKey(edge)]) };
+type Held = { nodes: Set<string>; edges: Set<string>; order: Map<string, number> };
+
+function heldBack(map: MapData, added: Added): Held | null {
+  const title = added.title?.toLowerCase();
+  const held: Held = { nodes: new Set(), edges: new Set(), order: new Map() };
+  for (const edge of map.edges) {
+    if (edge.upper !== added.under) continue;
+    const lower = map.nodes.find((n) => n.id === edge.lower);
+    const named = added.nodes?.includes(edge.lower) || (!!title && lower?.title.toLowerCase() === title);
+    if (!named || !lower) continue;
+    const i = added.nodes?.indexOf(edge.lower) ?? 0;
+    const alone = map.edges.filter((e) => e.lower === lower.id || e.upper === lower.id).length === 1;
+    if (lower.kind === "suggestion" && alone) held.nodes.add(lower.id);
+    held.edges.add(edgeKey(edge));
+    // Each arrival lands a beat after the one before.
+    held.order.set(lower.id, Math.max(0, i));
+    held.order.set(edgeKey(edge), Math.max(0, i));
+  }
+  return held.edges.size ? held : null;
+}
+
+/** What the toast says about what just arrived: from a check, where to start;
+ *  from a flag, where it went. */
+function arrivalMessage(map: MapData, added: Added | undefined, ids: string[]): ReactNode {
+  if (!added || ids.length === 0) return null;
+  const titles = ids.map((id) => map.nodes.find((n) => n.id === id)?.title).filter((t): t is string => !!t);
+  const upper = map.nodes.find((n) => n.id === added.under)?.title ?? "your topic";
+  const list = titles.length > 1 ? `${titles.slice(0, -1).join(", ")} and ${titles.at(-1)}` : titles[0];
+  if (added.from === "check") {
+    return (
+      <>
+        <span className="font-semibold text-ink">Start here.</span> Learning {list} first makes {upper} easier.{" "}
+        {titles.length > 1 ? "Select one to start it." : "Select it to start."}
+      </>
+    );
+  }
+  return (
+    <>
+      <span className="font-medium text-ink">{list}</span> is on your map, under {upper}.
+    </>
+  );
 }
 
 export function MapView({ added }: { added?: Added }) {
@@ -149,8 +180,11 @@ export function MapView({ added }: { added?: Added }) {
   const [selected, setSelected] = useState<string | null>(null);
   // Once the entrance has played, changes glide instead of replaying it.
   const [settled, setSettled] = useState(false);
-  const [held, setHeld] = useState<{ nodes: Set<string>; edges: Set<string> } | null>(null);
-  const [fresh, setFresh] = useState<Set<string>>(new Set());
+  const [held, setHeld] = useState<Held | null>(null);
+  // Just arrived, each with its place in the order they land.
+  const [fresh, setFresh] = useState<Map<string, number>>(new Map());
+  const [toast, setToast] = useState<ReactNode>(null);
+  const closeToast = useCallback(() => setToast(null), []);
   // On the first load, find what was just added (if anything) and hold it
   // back, in the same update, so it's never laid out with the rest.
   const [first, setFirst] = useState(false);
@@ -229,13 +263,18 @@ export function MapView({ added }: { added?: Added }) {
   useEffect(() => {
     if (!settled || !held) return;
     const t = window.setTimeout(() => {
-      setFresh(new Set([...held.nodes, ...held.edges]));
+      setFresh(held.order);
       setHeld(null);
-      const id = [...held.nodes][0] ?? (addedRef.current?.node || null);
-      if (id) setSelected(id);
+      // The first arrival is selected, so its links light up.
+      const arrived = [...held.order.entries()]
+        .filter(([k]) => !held.edges.has(k))
+        .sort((a, b) => a[1] - b[1])
+        .map(([k]) => k);
+      if (arrived[0]) setSelected(arrived[0]);
+      if (map) setToast(arrivalMessage(map, addedRef.current, arrived));
     }, 350);
     return () => window.clearTimeout(t);
-  }, [settled, held]);
+  }, [settled, held, map]);
 
   const lit = useMemo(() => (selected && shown ? connected(selected, shown.edges) : null), [selected, shown]);
   const at = new Map(placed.map((p) => [p.id, p]));
@@ -289,7 +328,11 @@ export function MapView({ added }: { added?: Added }) {
                 const dash = dashOf(e);
                 // Drawn once the topic above has landed; an added link waits
                 // for its new topic to pop in.
-                const delay = !settled ? (delays.get(e.upper) ?? FIRST) + 0.3 : fresh.has(edgeKey(e)) ? 0.45 : 0;
+                const delay = !settled
+                  ? (delays.get(e.upper) ?? FIRST) + 0.3
+                  : fresh.has(edgeKey(e))
+                    ? 0.45 + (fresh.get(edgeKey(e)) ?? 0) * 0.2
+                    : 0;
                 return (
                   // Solid links draw themselves; dashed and dotted ones fade in
                   // (drawing would overwrite their dashes).
@@ -321,7 +364,9 @@ export function MapView({ added }: { added?: Added }) {
                 n={n}
                 dim={!!lit && !lit.has(n.id)}
                 selected={selected === n.id}
-                delay={settled ? (fresh.has(n.id) ? 0.2 : 0) : (delays.get(n.id) ?? FIRST)}
+                delay={
+                  settled ? (fresh.has(n.id) ? 0.2 + (fresh.get(n.id) ?? 0) * 0.2 : 0) : (delays.get(n.id) ?? FIRST)
+                }
                 fresh={fresh.has(n.id)}
                 onSelect={() => setSelected(n.id === selected ? null : n.id)}
               />
@@ -329,6 +374,7 @@ export function MapView({ added }: { added?: Added }) {
           </motion.div>
         </div>
       )}
+      <Toast onClose={closeToast}>{toast}</Toast>
       <AnimatePresence>
         {chosen && <Selected key={chosen.id} n={chosen} map={shown} onClose={() => setSelected(null)} />}
       </AnimatePresence>

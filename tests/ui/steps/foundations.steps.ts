@@ -49,23 +49,27 @@ Given("I confirmed a topic keeping 2 foundations", async ({ page }) => {
 
 Then("there are {int} questions on each foundation to check", async ({ page }, n: number) => {
   for (const title of ["Union filesystems", "Linux processes"]) {
-    await expect(page.getByRole("region", { name: title }).getByLabel(`0 of ${n} answered`)).toBeVisible({
-      timeout: 30_000,
-    });
+    await expect(page.getByLabel(`${title}: 0 of ${n} answered`)).toBeVisible({ timeout: 30_000 });
   }
 });
 
+// One run through every foundation's questions, in order: each answer is
+// checked to be on the foundation the step names.
 async function answerChecks(page: Page, world: World, title: string, right: boolean[]) {
-  const section = page.getByRole("region", { name: title });
   for (const r of right) {
-    const q = section.getByLabel("Check question");
-    const stem = ((await q.locator("p").first().textContent()) ?? "").trim();
+    // The card still to answer, not the last one on its way out.
+    const q = page
+      .getByRole("region", { name: "Check question" })
+      .filter({ has: page.locator("ol li button:enabled") });
+    await expect(q).toHaveCount(1);
+    await expect(q).toContainText(title);
+    const stem = ((await q.locator("p").nth(1).textContent()) ?? "").trim();
     const d = db(world);
     const row = d.prepare("SELECT options_json FROM ground_items WHERE stem = ?").get(stem) as { options_json: string };
     d.close();
     const pick = (JSON.parse(row.options_json) as { text: string; correct: boolean }[]).find((o) => o.correct === r);
     await q.locator("ol li button", { hasText: pick?.text ?? "" }).click();
-    await section.getByRole("button", { name: /Next question|See how it went/ }).click();
+    await page.getByRole("button", { name: /Next question|Next: |See how it went/ }).click();
   }
 }
 
@@ -77,10 +81,21 @@ When("I answer the questions on {string} mostly wrong", async ({ page, world }, 
   await answerChecks(page, world, title, [true, false, false]);
 });
 
+const howItWent = (page: Page, title: string) =>
+  page.getByRole("region", { name: "How it went" }).getByRole("listitem", { name: title });
+
 Then("{string} seems solid and {string} might be shaky", async ({ page }, solid: string, shaky: string) => {
-  await expect(page.getByRole("region", { name: solid })).toContainText("Seems solid");
-  await expect(page.getByRole("region", { name: shaky })).toContainText("Might be shaky");
-  await expect(page.getByRole("region", { name: shaky }).getByRole("button", { name: "Start it" })).toBeVisible();
+  await expect(howItWent(page, solid)).toContainText("Seems solid");
+  await expect(howItWent(page, shaky)).toContainText("Might be shaky");
+});
+
+Then("{string} is on my map to start with, and {string} isn't", async ({ page }, shaky: string, solid: string) => {
+  await expect(howItWent(page, shaky)).toContainText("On your map, to start with");
+  await expect(howItWent(page, solid)).toContainText("Good ground to build on");
+  await page.getByRole("link", { name: "See where to start" }).click();
+  await expect(page.getByRole("status")).toContainText("Start here", { timeout: 15_000 });
+  await expect(page.getByRole("button", { name: `${shaky} (suggested)` })).toBeVisible();
+  await expect(page.getByRole("button", { name: `${solid} (suggested)` })).toHaveCount(0);
 });
 
 // ---- flags -----------------------------------------------------------------------------

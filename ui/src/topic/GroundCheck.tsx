@@ -1,23 +1,27 @@
 import { ArrowRight, Check, ChevronLeft, LoaderCircle, Play } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { GroundFoundation } from "../bindings/GroundFoundation";
+import type { GroundQuestion } from "../bindings/GroundQuestion";
 import type { GroundView } from "../bindings/GroundView";
 import { Screen } from "../components/Screen";
 import { Stage } from "../components/Stage";
 import { subscribe } from "../events";
-import { bead, button as landing, pop, popStage, stage } from "../motion";
+import { bead, button as landing, pop, stage } from "../motion";
 import { call } from "../rpc";
 
 const LETTERS = ["A", "B", "C", "D", "E"];
 
-// Checking the ground, the last step of setup: a few questions on each
-// foundation kept for the topic. Not a test: each comes out "seems solid" or
-// "might be shaky", and a shaky one is the learner's to start now, leave for
-// later (it stays on the map) or set aside.
+// Checking the ground, the last step of setup: one run of a few questions on
+// each foundation kept for the topic, in order. Not a test: each comes out
+// "seems solid" or "might be shaky", and the evidence sets what happens (a
+// shaky one goes on the map to start with), which the learner can change.
 export function GroundCheck({ topicId }: { topicId: string }) {
   const [g, setG] = useState<GroundView | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // The question just answered, kept up for its feedback until "Next".
+  const [showing, setShowing] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
   const load = useCallback(() => {
     call({ type: "get_ground", topic_id: topicId })
       .then(setG)
@@ -30,7 +34,26 @@ export function GroundCheck({ topicId }: { topicId: string }) {
     });
   }, [load, topicId]);
 
-  const done = !!g && g.foundations.every((f) => f.result !== null || f.status !== "kept");
+  const steps = (g?.foundations ?? []).flatMap((f, fi) => f.questions.map((q) => ({ f, fi, q })));
+  const at = showing ? steps.findIndex((s) => s.q.id === showing) : steps.findIndex((s) => s.q.answered === null);
+  const step = at >= 0 ? steps[at] : undefined;
+  const after = at >= 0 ? steps[at + 1] : undefined;
+  // Waiting on a foundation whose questions aren't written yet.
+  const waiting = !!g?.writing && (g.foundations.some((f) => f.questions.length === 0) || !step);
+  const done = !!g && !step && !waiting && g.foundations.length > 0;
+
+  const answer = (q: GroundQuestion, chosen: number) => {
+    setBusy(true);
+    setError(null);
+    call({ type: "answer_ground", item_id: q.id, order: q.order, chosen })
+      .then((next) => {
+        setG(next);
+        setShowing(q.id);
+      })
+      .catch((e: Error) => setError(e.message))
+      .finally(() => setBusy(false));
+  };
+
   const topicHref = `#/topic/${encodeURIComponent(topicId)}`;
   return (
     <Screen
@@ -49,192 +72,288 @@ export function GroundCheck({ topicId }: { topicId: string }) {
       {g && (
         <Stage className="flex flex-col gap-6" stagger={0.12}>
           <motion.p variants={pop} className="text-sm text-ink-2">
-            A few questions on each, while your practice is being prepared. Not a test: they show whether each
-            foundation seems solid, so you can decide what to learn underneath.
+            A few questions on each, while your practice is being prepared. Not a test: they show where the ground seems
+            solid, and where to start.
           </motion.p>
-          {g.foundations.map((f) => (
-            <Foundation key={f.suggestion_id} f={f} onChange={setG} />
-          ))}
-          <motion.div variants={landing} className="flex items-center gap-3 pt-2">
-            <a
-              href={topicHref}
-              className={`flex items-center gap-1.5 rounded-lg px-4 py-2 text-sm font-semibold transition-opacity hover:opacity-90 ${done ? "bg-accent text-canvas" : "text-ink-3 ring-1 ring-hairline"}`}
-            >
-              {done ? `Go to ${g.topic_title}` : "Finish later"} <ArrowRight size={14} aria-hidden />
-            </a>
-          </motion.div>
+          <Progress g={g} current={done ? -1 : (step?.fi ?? -1)} />
+          <AnimatePresence mode="wait" initial={false}>
+            {done ? (
+              <Summary key="summary" g={g} onChange={load} />
+            ) : step ? (
+              <Card
+                key={step.q.id}
+                f={step.f}
+                index={step.fi}
+                of={g.foundations.length}
+                q={step.q}
+                busy={busy}
+                next={!after ? "See how it went" : after.fi !== step.fi ? `Next: ${after.f.title}` : "Next question"}
+                onAnswer={(i) => answer(step.q, i)}
+                onNext={() => setShowing(null)}
+              />
+            ) : waiting ? (
+              <motion.p
+                key="writing"
+                variants={pop}
+                initial="hidden"
+                animate="shown"
+                exit="gone"
+                className="flex items-center gap-2 text-sm text-ink-3"
+              >
+                <LoaderCircle size={14} className="animate-spin text-accent" aria-hidden /> Writing the questions…
+              </motion.p>
+            ) : null}
+          </AnimatePresence>
+          {!done && (
+            <motion.div variants={landing} className="flex items-center gap-3 pt-2">
+              <a
+                href={topicHref}
+                className="flex items-center gap-1.5 rounded-lg px-4 py-2 text-sm text-ink-3 ring-1 ring-hairline transition-colors hover:text-ink"
+              >
+                Finish later <ArrowRight size={14} aria-hidden />
+              </a>
+            </motion.div>
+          )}
         </Stage>
       )}
     </Screen>
   );
 }
 
-function Foundation({ f, onChange }: { f: GroundFoundation; onChange: (g: GroundView) => void }) {
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const next = f.questions.findIndex((q) => q.answered === null);
-  const current = next >= 0 ? f.questions[next] : undefined;
-  const last = [...f.questions].reverse().find((q) => q.answered !== null);
-  const [showLast, setShowLast] = useState(false);
+// Where the run is: each foundation's name with a dot per question, the
+// current one brighter.
+function Progress({ g, current }: { g: GroundView; current: number }) {
+  return (
+    <motion.ol variants={stage(0.08, 0)} className="flex flex-wrap gap-x-6 gap-y-2">
+      {g.foundations.map((f, i) => {
+        const answered = f.questions.filter((q) => q.answered !== null).length;
+        return (
+          <motion.li
+            key={f.suggestion_id}
+            variants={pop}
+            aria-label={`${f.title}: ${answered} of ${f.questions.length} answered`}
+            className={`flex items-center gap-2 text-xs transition-colors ${i === current ? "text-ink" : "text-ink-4"}`}
+          >
+            {f.title}
+            <span className="flex items-center gap-1">
+              {f.questions.map((q) => (
+                <motion.span
+                  key={q.id}
+                  variants={bead}
+                  className={`block size-2 rounded-full transition-colors ${q.answered === null ? "ring-1 ring-inset ring-overlay" : q.correct ? "bg-teal" : "bg-warn"}`}
+                />
+              ))}
+            </span>
+          </motion.li>
+        );
+      })}
+    </motion.ol>
+  );
+}
 
-  const answer = (item: string, order: number[], chosen: number) => {
-    setBusy(true);
-    setError(null);
-    call({ type: "answer_ground", item_id: item, order, chosen })
-      .then((g) => {
-        onChange(g);
-        setShowLast(true);
-      })
-      .catch((e: Error) => setError(e.message))
-      .finally(() => setBusy(false));
-  };
-
-  const resolve = (action: "start" | "later" | "dismiss") => {
-    call({ type: "resolve_foundation", suggestion_id: f.suggestion_id, action })
-      .then((t) => {
-        if (action === "start") window.location.hash = `#/setup/${encodeURIComponent(t.id)}`;
-      })
-      .catch((e: Error) => setError(e.message));
-  };
-
-  const answered = f.questions.filter((q) => q.answered !== null).length;
+function Card({
+  f,
+  index,
+  of,
+  q,
+  busy,
+  next,
+  onAnswer,
+  onNext,
+}: {
+  f: GroundFoundation;
+  index: number;
+  of: number;
+  q: GroundQuestion;
+  busy: boolean;
+  next: string;
+  onAnswer: (i: number) => void;
+  onNext: () => void;
+}) {
+  const answered = q.answered !== null;
+  const nextRef = useRef<HTMLButtonElement>(null);
+  // Enter moves on, as in practice.
+  useEffect(() => {
+    if (answered) nextRef.current?.focus();
+  }, [answered]);
+  const tone = (i: number) =>
+    !answered
+      ? "border-hairline hover:border-teal/50 hover:bg-teal/5"
+      : i === q.key
+        ? "border-teal/60 bg-teal/5"
+        : i === q.answered
+          ? "border-warn/60 bg-warn/5"
+          : "border-hairline opacity-60";
   return (
     <motion.section
-      variants={popStage(0.06, 0.08)}
-      aria-label={f.title}
-      className="flex flex-col gap-4 rounded-2xl bg-subtle px-5 py-5 ring-1 ring-hairline"
+      variants={stage(0.05, 0)}
+      initial="hidden"
+      animate="shown"
+      exit="gone"
+      aria-label="Check question"
+      className="flex flex-col gap-3 rounded-2xl bg-subtle px-5 py-5 ring-1 ring-hairline"
     >
-      <motion.div variants={pop} className="flex items-start gap-3">
-        <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-          <h2 className="text-base font-semibold text-ink">{f.title}</h2>
-          {f.why && <p className="text-xs text-ink-3">{f.why}</p>}
-        </div>
-        <motion.span
-          variants={stage(0.06, 0.2)}
-          className="flex items-center gap-1 pt-1"
-          aria-label={`${answered} of ${f.questions.length} answered`}
-        >
-          {f.questions.map((q) => (
-            <motion.span
-              key={q.id}
-              variants={bead}
-              className={`block size-2 rounded-full ${q.answered === null ? "ring-1 ring-inset ring-overlay" : q.correct ? "bg-teal" : "bg-warn"}`}
-            />
-          ))}
-        </motion.span>
-      </motion.div>
-
-      {f.questions.length === 0 && (
-        <p className="flex items-center gap-2 text-sm text-ink-3">
-          <LoaderCircle size={14} className="animate-spin text-accent" aria-hidden /> Writing questions…
-        </p>
-      )}
-
-      <AnimatePresence mode="wait" initial={false}>
-        {showLast && last ? (
-          <motion.div
-            key={`fb-${last.id}`}
-            variants={pop}
-            initial="hidden"
-            animate="shown"
-            exit="gone"
-            className="flex flex-col gap-2"
-          >
-            <p className={last.correct ? "text-sm text-teal" : "text-sm text-warn"}>
-              {last.correct ? "Right." : "Not quite."}{" "}
-              <span className="text-ink-3">{last.feedback.find((o) => o.correct)?.why}</span>
-            </p>
+      <motion.p variants={pop} className="text-xs text-ink-4">
+        {of > 1 ? `Foundation ${index + 1} of ${of} · ` : ""}
+        <span className="text-ink-3">{f.title}</span>
+      </motion.p>
+      <motion.p variants={pop} className="text-[15px] leading-relaxed text-ink">
+        {q.stem}
+      </motion.p>
+      <ol className="flex flex-col gap-1.5">
+        {q.options.map((text, i) => (
+          <motion.li key={text} variants={pop}>
             <button
               type="button"
-              onClick={() => setShowLast(false)}
-              className="flex w-fit items-center gap-1.5 rounded-md px-2.5 py-1 text-xs text-ink-2 ring-1 ring-hairline hover:bg-raised"
+              disabled={busy || answered}
+              onClick={() => onAnswer(i)}
+              className={`flex w-full items-start gap-2.5 rounded-lg border px-3 py-2 text-left text-sm transition-colors ${tone(i)}`}
             >
-              {current ? "Next question" : "See how it went"} <ArrowRight size={12} aria-hidden />
+              <span className="shrink-0 pt-0.5 font-mono text-xs text-ink-3">{LETTERS[i]}</span>
+              <span className="text-ink">{text}</span>
             </button>
-          </motion.div>
-        ) : current ? (
+          </motion.li>
+        ))}
+      </ol>
+      <AnimatePresence>
+        {answered && (
           <motion.div
-            key={current.id}
-            variants={stage(0.05, 0)}
+            key="feedback"
+            variants={stage(0.06, 0)}
             initial="hidden"
             animate="shown"
             exit="gone"
-            className="flex flex-col gap-2.5"
-            aria-label="Check question"
+            className="flex flex-col gap-3"
           >
-            <motion.p variants={pop} className="text-[15px] leading-relaxed text-ink">
-              {current.stem}
+            <motion.p variants={pop} className={q.correct ? "text-sm text-teal" : "text-sm text-warn"}>
+              {q.correct ? "Right." : "Not quite."}{" "}
+              <span className="text-ink-3">{q.feedback.find((o) => o.correct)?.why}</span>
             </motion.p>
-            <ol className="flex flex-col gap-1.5">
-              {current.options.map((text, i) => (
-                <motion.li key={text} variants={pop}>
-                  <button
-                    type="button"
-                    disabled={busy}
-                    onClick={() => answer(current.id, current.order, i)}
-                    className="flex w-full items-start gap-2.5 rounded-lg border border-hairline px-3 py-2 text-left text-sm transition-colors hover:border-teal/50 hover:bg-teal/5"
-                  >
-                    <span className="shrink-0 pt-0.5 font-mono text-xs text-ink-3">{LETTERS[i]}</span>
-                    <span className="text-ink">{text}</span>
-                  </button>
-                </motion.li>
-              ))}
-            </ol>
+            <motion.button
+              ref={nextRef}
+              variants={pop}
+              type="button"
+              onClick={onNext}
+              className="flex w-fit items-center gap-1.5 rounded-md px-3 py-1.5 text-xs text-ink-2 ring-1 ring-hairline hover:bg-raised"
+            >
+              {next} <ArrowRight size={12} aria-hidden />
+            </motion.button>
           </motion.div>
-        ) : f.result ? (
-          <Result key="result" f={f} onResolve={resolve} />
-        ) : null}
+        )}
       </AnimatePresence>
-      {error && <p className="text-xs text-danger">{error}</p>}
     </motion.section>
   );
 }
 
-function Result({ f, onResolve }: { f: GroundFoundation; onResolve: (a: "start" | "later" | "dismiss") => void }) {
-  const solid = f.result === "solid";
+// How it went: each foundation's result, what kizn did about it (a shaky one
+// is on the map to start with), and a way to change it.
+function Summary({ g, onChange }: { g: GroundView; onChange: () => void }) {
+  const [error, setError] = useState<string | null>(null);
+  const resolve = (f: GroundFoundation, action: "start" | "later" | "dismiss") => {
+    setError(null);
+    call({ type: "resolve_foundation", suggestion_id: f.suggestion_id, action })
+      .then((t) => {
+        if (action === "start") window.location.hash = `#/setup/${encodeURIComponent(t.id)}`;
+        else onChange();
+      })
+      .catch((e: Error) => setError(e.message));
+  };
+  const onMap = g.foundations.filter((f) => f.status === "later");
+  const mapHref = `#/map?${new URLSearchParams({
+    arrived: onMap.map((f) => f.suggestion_id).join(","),
+    under: g.topic_id,
+    from: "check",
+  })}`;
   return (
-    <motion.div variants={stage(0.08, 0)} initial="hidden" animate="shown" exit="gone" className="flex flex-col gap-3">
-      <motion.p
-        variants={pop}
-        className={`flex items-center gap-1.5 text-sm font-medium ${solid ? "text-teal" : "text-warn"}`}
+    <motion.section
+      variants={stage(0.1, 0)}
+      initial="hidden"
+      animate="shown"
+      exit="gone"
+      aria-label="How it went"
+      className="flex flex-col gap-4"
+    >
+      <ul className="flex flex-col gap-2">
+        {g.foundations.map((f) => (
+          <motion.li
+            key={f.suggestion_id}
+            variants={pop}
+            aria-label={f.title}
+            className="flex flex-col gap-2 rounded-2xl bg-subtle px-5 py-4 ring-1 ring-hairline"
+          >
+            <div className="flex items-center gap-3">
+              <p className="flex-1 text-sm font-medium text-ink">{f.title}</p>
+              <span
+                className={`flex items-center gap-1 text-xs font-medium ${f.result === "solid" ? "text-teal" : "text-warn"}`}
+              >
+                {f.result === "solid" && <Check size={12} aria-hidden />}
+                {f.result === "solid" ? "Seems solid" : "Might be shaky"}
+              </span>
+            </div>
+            <Choice f={f} onResolve={(a) => resolve(f, a)} />
+          </motion.li>
+        ))}
+      </ul>
+      {error && <p className="text-xs text-danger">{error}</p>}
+      <motion.div variants={landing}>
+        <a
+          href={onMap.length ? mapHref : `#/topic/${encodeURIComponent(g.topic_id)}`}
+          className="flex w-fit items-center gap-1.5 rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-canvas transition-opacity hover:opacity-90"
+        >
+          {onMap.length ? "See where to start" : `Go to ${g.topic_title}`} <ArrowRight size={14} aria-hidden />
+        </a>
+      </motion.div>
+    </motion.section>
+  );
+}
+
+// What happened to a foundation, in a few words, and the one or two ways to
+// change it.
+function Choice({ f, onResolve }: { f: GroundFoundation; onResolve: (a: "start" | "later" | "dismiss") => void }) {
+  const quiet = "rounded-md px-2 py-1 text-xs text-ink-3 transition-colors hover:bg-raised hover:text-ink";
+  const start = (
+    <button
+      type="button"
+      onClick={() => onResolve("start")}
+      className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-accent hover:bg-accent/10"
+    >
+      <Play size={11} aria-hidden /> Start it now
+    </button>
+  );
+  const quietly = (label: string, action: "later" | "dismiss") => (
+    <button type="button" onClick={() => onResolve(action)} className={quiet}>
+      {label}
+    </button>
+  );
+  const { line, actions } =
+    f.status === "later"
+      ? {
+          line: "On your map, to start with.",
+          actions: (
+            <>
+              {start}
+              {quietly("Not needed", "dismiss")}
+            </>
+          ),
+        }
+      : f.status === "dismissed"
+        ? { line: "Not added.", actions: quietly("Add it to my map", "later") }
+        : f.status === "started"
+          ? { line: "Being set up.", actions: null }
+          : { line: "Good ground to build on.", actions: quietly("Add it anyway", "later") };
+  return (
+    <AnimatePresence mode="wait" initial={false}>
+      <motion.div
+        key={f.status}
+        initial={{ opacity: 0, y: 3 }}
+        animate={{ opacity: 1, y: 0 }}
+        exit={{ opacity: 0, y: -3 }}
+        transition={{ duration: 0.15 }}
+        className="flex flex-wrap items-center gap-1"
       >
-        {solid ? <Check size={14} aria-hidden /> : null}
-        {solid ? "Seems solid" : "Might be shaky"}
-      </motion.p>
-      <motion.p variants={pop} className="text-xs text-ink-3">
-        {solid
-          ? "Good ground to build on."
-          : f.status === "later"
-            ? "On your map, to come back to."
-            : f.status === "dismissed"
-              ? "Set aside: you've got this."
-              : "Learning it first would make the topic easier. It's your call."}
-      </motion.p>
-      {!solid && f.status === "kept" && (
-        <motion.div variants={pop} className="flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            onClick={() => onResolve("start")}
-            className="flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-xs font-semibold text-canvas hover:opacity-90"
-          >
-            <Play size={12} aria-hidden /> Start it
-          </button>
-          <button
-            type="button"
-            onClick={() => onResolve("later")}
-            className="rounded-lg px-3 py-1.5 text-xs text-ink-2 ring-1 ring-hairline hover:bg-raised"
-          >
-            Later
-          </button>
-          <button
-            type="button"
-            onClick={() => onResolve("dismiss")}
-            className="rounded-lg px-3 py-1.5 text-xs text-ink-3 hover:bg-raised hover:text-ink"
-          >
-            I've got this
-          </button>
-        </motion.div>
-      )}
-    </motion.div>
+        <p className="mr-auto text-xs text-ink-3">{line}</p>
+        {actions}
+      </motion.div>
+    </AnimatePresence>
   );
 }
