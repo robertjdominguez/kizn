@@ -251,11 +251,12 @@ function Summary({ g, onChange }: { g: GroundView; onChange: () => void }) {
   const [error, setError] = useState<string | null>(null);
   const resolve = (f: GroundFoundation, action: "start" | "later" | "dismiss") => {
     setError(null);
+    if (action === "start") {
+      window.location.hash = `#/new-topic?foundation=${encodeURIComponent(f.suggestion_id)}`;
+      return;
+    }
     call({ type: "resolve_foundation", suggestion_id: f.suggestion_id, action })
-      .then((t) => {
-        if (action === "start") window.location.hash = `#/setup/${encodeURIComponent(t.id)}`;
-        else onChange();
-      })
+      .then(onChange)
       .catch((e: Error) => setError(e.message));
   };
   const onMap = g.foundations.filter((f) => f.status === "later");

@@ -49,7 +49,7 @@ type View =
   | { name: "today" }
   | { name: "settings" }
   | { name: "topic"; id: string; from?: "map" }
-  | { name: "setup"; id?: string }
+  | { name: "setup"; id?: string; foundation?: string }
   | { name: "practice"; id?: string }
   | { name: "check"; id: string }
   | { name: "map"; added?: Added };
@@ -59,7 +59,8 @@ const viewFromHash = (): View => {
   const [h = "", query = ""] = window.location.hash.split("?");
   const q = new URLSearchParams(query);
   if (h === "#/settings") return { name: "settings" };
-  if (h === "#/new-topic") return { name: "setup" };
+  // From a suggested foundation: new-topic?foundation=<suggestion>.
+  if (h === "#/new-topic") return { name: "setup", foundation: q.get("foundation") ?? undefined };
   const setup = h.match(/^#\/setup\/(.+)$/);
   if (setup?.[1]) return { name: "setup", id: decodeURIComponent(setup[1]) };
   if (h === "#/practice") return { name: "practice" };
@@ -141,7 +142,7 @@ export function App() {
             {view.name === "today" && <Today />}
             {view.name === "settings" && <Settings />}
             {view.name === "topic" && <TopicPage topicId={view.id} from={view.from} />}
-            {view.name === "setup" && <Setup topicId={view.id} />}
+            {view.name === "setup" && <Setup topicId={view.id} foundation={view.foundation} />}
             {view.name === "practice" && <Practice topicId={view.id} />}
             {view.name === "check" && <GroundCheck topicId={view.id} />}
             {view.name === "map" && <MapView added={view.added} />}
