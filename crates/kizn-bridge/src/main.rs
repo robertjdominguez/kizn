@@ -6,6 +6,8 @@
 //!   GET  /events       server-sent Events (config changes, later job progress)
 //!   POST /test/fresh   (`test` feature only) switch to a new, empty data
 //!                      directory: "Given a fresh data directory" in @ui steps
+//!   POST /test/seed    (`test`) load tests/fixtures/<fixture>/seed.sql: { "fixture": "…" }
+//!   POST /test/later   (`test`) move the clock on: { "days": 3 }
 //!
 //! Env: KIZN_DATA_DIR / KIZN_CONFIG_DIR (where), KIZN_BRIDGE_PORT (default
 //! 7878), KIZN_MOCK=1 (`just dev mock`: model traffic goes to the fake model
@@ -39,6 +41,9 @@ struct Bridge {
     /// For `/test/fresh`, which opens a new App with the same deps.
     #[cfg_attr(not(feature = "test"), allow(dead_code))]
     deps: AppDeps,
+    /// The clock those deps use, for `/test/later`.
+    #[cfg_attr(not(feature = "test"), allow(dead_code))]
+    clock: Arc<kizn_core::ShiftedClock>,
 }
 
 impl Bridge {
@@ -76,6 +81,7 @@ async fn fresh(State(bridge): State<Bridge>) -> Response {
     let id = kizn_core::new_id(&kizn_core::SystemClock, &kizn_core::SeededRng::from_os());
     let dir = base.with_file_name(format!("fresh-{id}"));
     let deps = AppDeps { secrets: Arc::new(MemorySecrets::default()), ..bridge.deps.clone() };
+    bridge.clock.reset();
     match App::open(Paths::in_dir(&dir), deps) {
         Ok(next) => {
             *bridge.app.write().unwrap() = Arc::new(next);
@@ -83,6 +89,32 @@ async fn fresh(State(bridge): State<Bridge>) -> Response {
         }
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(e)).into_response(),
     }
+}
+
+/// Loads a fixture's seed.sql (tests/fixtures/<name>) into the current data.
+#[cfg(feature = "test")]
+async fn seed(State(bridge): State<Bridge>, Json(body): Json<serde_json::Value>) -> Response {
+    let name = body["fixture"].as_str().unwrap_or("");
+    if name.is_empty() || name.contains(['/', '\\', '.']) {
+        return (StatusCode::BAD_REQUEST, "fixture: a fixture's name").into_response();
+    }
+    let file =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures").join(name).join("seed.sql");
+    let result = std::fs::read_to_string(&file).map_err(|e| e.to_string()).and_then(|sql| {
+        let db = bridge.app().paths().data_dir.join(kizn_app::DB_FILE);
+        kizn_store::Store::open(&db).and_then(|s| s.execute_batch(&sql)).map_err(|e| e.to_string())
+    });
+    match result {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
+    }
+}
+
+/// Moves the clock some days on: `{ "days": 3 }`.
+#[cfg(feature = "test")]
+async fn later(State(bridge): State<Bridge>, Json(body): Json<serde_json::Value>) -> Response {
+    bridge.clock.later(body["days"].as_i64().unwrap_or(1));
+    StatusCode::NO_CONTENT.into_response()
 }
 
 fn paths() {
@@ -282,8 +314,9 @@ async fn serve() {
     let mut deps = AppDeps::system();
     // `just dev days=N`: the clock runs N days ahead, to walk a week of practice.
     let days: i64 = std::env::var("KIZN_DAYS_LATER").ok().and_then(|d| d.parse().ok()).unwrap_or(0);
+    let clock = Arc::new(kizn_core::ShiftedClock::days(days));
+    deps.clock = clock.clone();
     if days != 0 {
-        deps.clock = Arc::new(kizn_core::ShiftedClock(chrono::Duration::days(days)));
         eprintln!("kizn-bridge: the clock runs {days} days ahead (KIZN_DAYS_LATER)");
     }
     if mock {
@@ -316,7 +349,8 @@ async fn serve() {
     );
     let router = Router::new().route("/rpc", post(rpc)).route("/events", get(events));
     #[cfg(feature = "test")]
-    let router = router.route("/test/fresh", post(fresh));
-    let router = router.with_state(Bridge { app: Arc::new(RwLock::new(Arc::new(app))), deps });
+    let router =
+        router.route("/test/fresh", post(fresh)).route("/test/seed", post(seed)).route("/test/later", post(later));
+    let router = router.with_state(Bridge { app: Arc::new(RwLock::new(Arc::new(app))), deps, clock });
     axum::serve(listener, router).await.unwrap();
 }

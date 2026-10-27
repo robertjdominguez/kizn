@@ -15,13 +15,30 @@ impl Clock for SystemClock {
     }
 }
 
-/// The system clock, a number of days ahead: the dev bridge's
-/// `KIZN_DAYS_LATER`, so a developer can walk a learner's week in one sitting.
-pub struct ShiftedClock(pub chrono::Duration);
+/// The system clock, some days ahead: the dev bridge's `KIZN_DAYS_LATER`
+/// and the test bridge's `/test/later`, so a learner's week can be walked in
+/// one sitting.
+#[derive(Default)]
+pub struct ShiftedClock(std::sync::atomic::AtomicI64);
+
+impl ShiftedClock {
+    pub fn days(days: i64) -> Self {
+        Self(std::sync::atomic::AtomicI64::new(days))
+    }
+
+    /// Moves the clock this many days further on.
+    pub fn later(&self, days: i64) {
+        self.0.fetch_add(days, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    pub fn reset(&self) {
+        self.0.store(0, std::sync::atomic::Ordering::SeqCst);
+    }
+}
 
 impl Clock for ShiftedClock {
     fn now(&self) -> DateTime<Utc> {
-        Utc::now() + self.0
+        Utc::now() + Duration::days(self.0.load(std::sync::atomic::Ordering::SeqCst))
     }
 }
 
