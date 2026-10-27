@@ -63,6 +63,11 @@ pub enum Command {
     StopDrafting {
         topic_id: String,
     },
+    /// Deletes a topic (or discards a draft) with everything in it: its
+    /// questions, practice, reading and notes. Topics linked to it stay.
+    DeleteTopic {
+        topic_id: String,
+    },
     /// Carries on a draft that failed or was stopped, from where it left off.
     ResumeDrafting {
         topic_id: String,

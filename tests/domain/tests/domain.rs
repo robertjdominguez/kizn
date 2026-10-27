@@ -2154,3 +2154,52 @@ async fn run() {
         })
         .await;
 }
+
+// --- Letting a topic go ------------------------------------------------------------
+
+#[when(expr = "I delete {string}")]
+async fn delete_topic(w: &mut Kizn, title: String) {
+    let topic_id = w.tid(&title);
+    match w.command(Command::DeleteTopic { topic_id }).await {
+        Ok(Reply::Done) => {}
+        other => panic!("expected the topic deleted, got {other:?}"),
+    }
+}
+
+#[when("I discard the draft")]
+async fn discard_draft(w: &mut Kizn) {
+    let topic_id = w.topic_id();
+    match w.command(Command::DeleteTopic { topic_id }).await {
+        Ok(Reply::Done) => {}
+        other => panic!("expected the draft discarded, got {other:?}"),
+    }
+}
+
+impl Kizn {
+    async fn titles_on_today_and_map(&mut self) -> (Vec<String>, Vec<String>) {
+        let today = match self.command(Command::GetToday).await {
+            Ok(Reply::Today(t)) => t.topics.into_iter().map(|t| t.title).collect(),
+            other => panic!("expected Today, got {other:?}"),
+        };
+        let map = match self.command(Command::GetMap).await {
+            Ok(Reply::Map(m)) => m.nodes.into_iter().map(|n| n.title).collect(),
+            other => panic!("expected the map, got {other:?}"),
+        };
+        (today, map)
+    }
+}
+
+#[then(expr = "{string} is gone from Today and my map")]
+async fn gone_from_today_and_map(w: &mut Kizn, title: String) {
+    let (today, map) = w.titles_on_today_and_map().await;
+    assert!(!today.contains(&title), "{title} is still on Today: {today:?}");
+    assert!(!map.contains(&title), "{title} is still on the map: {map:?}");
+}
+
+#[then(expr = "{string} and {string} are still there")]
+async fn still_there(w: &mut Kizn, a: String, b: String) {
+    let (today, map) = w.titles_on_today_and_map().await;
+    for t in [&a, &b] {
+        assert!(today.contains(t) && map.contains(t), "{t} should still be there: {today:?} / {map:?}");
+    }
+}

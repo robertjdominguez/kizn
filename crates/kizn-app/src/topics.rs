@@ -286,6 +286,42 @@ impl App {
         self.topic_view(&id)
     }
 
+    /// Deletes a topic, or discards a draft. Any drafting stops first; the
+    /// topics it was linked to (and suggested from) are told they changed.
+    pub(crate) fn delete_topic(&self, topic_id: &str) -> Result<(), AppError> {
+        let topic = self.store.topic(topic_id)?.ok_or_else(|| AppError::Refused("there's no such topic".into()))?;
+        if let Some(stop) = self.drafting.lock().unwrap().remove(&topic.id) {
+            stop.store(true, Ordering::Relaxed);
+        }
+        let mut neighbours: Vec<String> = self
+            .store
+            .links()?
+            .into_iter()
+            .filter_map(|l| {
+                if l.upper_id == topic.id {
+                    Some(l.lower_id)
+                } else if l.lower_id == topic.id {
+                    Some(l.upper_id)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        neighbours.extend(
+            self.store
+                .suggestions(None)?
+                .into_iter()
+                .filter(|s| s.topic_id.as_deref() == Some(&topic.id))
+                .map(|s| s.for_topic),
+        );
+        self.store.delete_topic(&topic.id)?;
+        self.ctx.changed(&topic.id);
+        for n in neighbours {
+            self.ctx.changed(&n);
+        }
+        Ok(())
+    }
+
     /// Carries on a draft that failed or was stopped, from where it left off.
     pub(crate) fn resume_drafting(&self, topic_id: &str) -> Result<TopicView, AppError> {
         let topic = self.draft_topic(topic_id)?;

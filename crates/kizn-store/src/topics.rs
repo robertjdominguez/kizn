@@ -257,11 +257,6 @@ impl Store {
         Ok(())
     }
 
-    pub fn delete_topic(&self, topic_id: &str) -> Result<()> {
-        self.conn.lock().unwrap().execute("DELETE FROM topics WHERE id = ?1", [topic_id])?;
-        Ok(())
-    }
-
     // ---- outcomes and concepts ----
 
     pub fn insert_outcome(&self, o: &OutcomeRow) -> Result<()> {
@@ -775,6 +770,18 @@ impl Store {
     }
 
     /// How many writing runs an outcome has had (finished or not).
+    /// Deletes a topic and, by cascade, everything in it. A suggestion that
+    /// was started as this topic is set aside rather than left pointing
+    /// at nothing.
+    pub fn delete_topic(&self, topic_id: &str) -> Result<()> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        tx.execute("UPDATE suggestions SET status = 'dismissed', topic_id = NULL WHERE topic_id = ?1", [topic_id])?;
+        tx.execute("DELETE FROM topics WHERE id = ?1", [topic_id])?;
+        tx.commit()?;
+        Ok(())
+    }
+
     pub fn batch_count(&self, outcome_id: &str) -> Result<i64> {
         let conn = self.conn.lock().unwrap();
         Ok(conn.query_row("SELECT count(*) FROM item_batches WHERE outcome_id = ?1", [outcome_id], |r| r.get(0))?)

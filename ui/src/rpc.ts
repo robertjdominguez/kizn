@@ -49,6 +49,7 @@ const REPLY = {
   answer_ground: "ground",
   resolve_foundation: "topic",
   foundation_prefill: "prefill",
+  delete_topic: "done",
   get_map: "map",
   resolve_flag: "topic",
   save_note: "note",
