@@ -1098,6 +1098,72 @@ fn week_practised(w: &mut Kizn) {
     assert!(t.week.iter().filter(|d| !d.today).all(|d| !d.practised));
 }
 
+// --- This key is wrong ---------------------------------------------------------
+
+#[given("I missed a card")]
+async fn missed_a_card(w: &mut Kizn) {
+    practising(w).await;
+    w.answer_card(0, false).await;
+}
+
+#[when(expr = "I say {string} and confirm")]
+async fn say_key_wrong(w: &mut Kizn, what: String) {
+    assert_eq!(what, "This key is wrong");
+    let attempt_id = w.answers.last().unwrap().attempt_id.clone();
+    match w.command(Command::Dispute { attempt_id }).await {
+        Ok(Reply::Disputed(d)) => {
+            assert_eq!(d.concepts.len(), 1);
+            assert_eq!((d.concepts[0].before.as_str(), d.concepts[0].after.as_str()), ("seen", "unseen"));
+        }
+        other => panic!("expected Disputed, got {other:?}"),
+    }
+}
+
+#[then("that answer moves nothing")]
+async fn answer_moves_nothing(w: &mut Kizn) {
+    let topic_id = w.topic_id();
+    match w.command(Command::GetProgress { topic_id }).await {
+        Ok(Reply::Progress(p)) => {
+            assert!(p.outcomes.iter().flat_map(|o| &o.concepts).all(|c| c.state == "unseen" && c.answers == 0));
+        }
+        other => panic!("expected Progress, got {other:?}"),
+    }
+    let s = w.read_summary().await;
+    assert_eq!((s.answered, s.slipped.len()), (0, 0));
+}
+
+#[then("the question never appears again")]
+async fn never_again(w: &mut Kizn) {
+    let item_id = w.deck.as_ref().unwrap().cards[0].item_id.clone();
+    assert_eq!(w.store().item(&item_id).unwrap().unwrap().status, "disputed");
+    w.clock.advance(chrono::Duration::days(4));
+    let deck = w.start_practice().await;
+    assert!(deck.cards.iter().all(|c| c.item_id != item_id), "the disputed question came back");
+}
+
+#[then("a replacement is written for its slot")]
+async fn replacement_written(w: &mut Kizn) {
+    let item_id = w.deck.as_ref().unwrap().cards[0].item_id.clone();
+    let item = w.store().item(&item_id).unwrap().unwrap();
+    let concept = item.concept_ids[0].clone();
+    let recall_for = |w: &Kizn| {
+        w.store()
+            .items(&item.outcome_id, Some("active"))
+            .unwrap()
+            .iter()
+            .filter(|i| i.kind == "recall" && i.concept_ids.first() == Some(&concept))
+            .count()
+    };
+    // The fixture held two; the disputed one leaves one until the writer refills.
+    for _ in 0..3000 {
+        if recall_for(w) >= 2 {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    panic!("no replacement written for the disputed question's slot");
+}
+
 #[tokio::main]
 async fn main() {
     let features = concat!(env!("CARGO_MANIFEST_DIR"), "/../../features");

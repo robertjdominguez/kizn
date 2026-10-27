@@ -36,6 +36,7 @@ const REPLY = {
   get_concept: "concept",
   find_sources: "concept",
   mark_studied: "concept",
+  dispute: "disputed",
 } as const satisfies Record<Command["type"], Reply["type"]>;
 
 type ReplyData<T extends Reply["type"]> = Extract<Reply, { type: T }>["data"];

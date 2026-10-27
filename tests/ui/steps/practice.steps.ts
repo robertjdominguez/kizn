@@ -331,3 +331,95 @@ Then("the topic shows {int} concepts stuck", async ({ page }, n: number) => {
     new RegExp(`${n}\\s*stuck`),
   );
 });
+
+// ---- this key is wrong -----------------------------------------------------------
+
+/** One row from the scenario's database. */
+function row<T>(world: World, sql: string, ...args: string[]): T {
+  if (!world.dataDir) throw new Error("no data directory");
+  const db = new DatabaseSync(join(world.dataDir, "kizn.db"), { readOnly: true });
+  try {
+    return db.prepare(sql).get(...args) as T;
+  } finally {
+    db.close();
+  }
+}
+
+Given("I missed a card", async ({ page, world }) => {
+  await seedTopic(page);
+  await openPractice(page, world, `/#/practice/${TOPIC}`);
+  await skipIntro(page);
+  await answer(page, world as PracticeWorld, false, false);
+});
+
+When("I say {string}", async ({ page }, what: string) => {
+  await page.getByRole("button", { name: what }).click();
+});
+
+When("I say {string} and confirm", async ({ page }, what: string) => {
+  await page.getByRole("button", { name: what }).click();
+  await page.getByRole("group", { name: "Look again" }).getByRole("button", { name: "Yes, set it aside" }).click();
+});
+
+Then("that answer moves nothing", async ({ page }) => {
+  await expect(page.getByText(/^Set aside\./)).toBeVisible();
+  await expect(page.getByText(/: not started$/)).toBeVisible();
+});
+
+Then("the question never appears again", async ({ world }) => {
+  const card = (world as PracticeWorld).deck?.cards[0];
+  if (!card) throw new Error("no card");
+  await expect
+    .poll(() => row<{ status: string }>(world, "SELECT status FROM items WHERE id = ?", card.item_id).status)
+    .toBe("disputed");
+});
+
+Then("a replacement is written for its slot", async ({ world }) => {
+  const card = (world as PracticeWorld).deck?.cards[0];
+  if (!card) throw new Error("no card");
+  const item = row<{ outcome_id: string; concept_ids_json: string }>(
+    world,
+    "SELECT outcome_id, concept_ids_json FROM items WHERE id = ?",
+    card.item_id,
+  );
+  const concept = (JSON.parse(item.concept_ids_json) as string[])[0] ?? "";
+  // The fixture held two; the disputed one leaves one until the writer refills.
+  await expect
+    .poll(
+      () =>
+        row<{ n: number }>(
+          world,
+          "SELECT count(*) AS n FROM items WHERE outcome_id = ? AND kind = 'recall' AND status = 'active' AND json_extract(concept_ids_json, '$[0]') = ?",
+          item.outcome_id,
+          concept,
+        ).n,
+      { timeout: 60_000 },
+    )
+    .toBeGreaterThanOrEqual(2);
+});
+
+Then("I see kizn's reason for its key first", async ({ page, world }) => {
+  const card = (world as PracticeWorld).deck?.cards[0];
+  if (!card) throw new Error("no card");
+  const key = optionsOf(world, card.item_id).find((o) => o.correct);
+  const look = page.getByRole("group", { name: "Look again" });
+  await expect(look).toContainText("kizn's key is");
+  await expect(look).toContainText(key?.why ?? "");
+  await expect(look).toContainText("Still think the key is wrong?");
+});
+
+When("I keep the question", async ({ page }) => {
+  await page.getByRole("button", { name: "Keep it" }).click();
+});
+
+Then("my answer still counts", async ({ page, world }) => {
+  await expect(page.getByRole("group", { name: "Look again" })).toHaveCount(0);
+  await expect(page.getByText("Not this time.")).toBeVisible();
+  const card = (world as PracticeWorld).deck?.cards[0];
+  const a = row<{ disputed_at: string | null }>(
+    world,
+    "SELECT disputed_at FROM attempts WHERE item_id = ?",
+    card?.item_id ?? "",
+  );
+  expect(a.disputed_at).toBeNull();
+});

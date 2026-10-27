@@ -24,7 +24,7 @@ use tokio::sync::broadcast;
 
 pub use command::{
     AnswerView, AppError, AppInfo, CardView, CheckView, Command, ConceptChange, ConceptLine, ConceptPageView,
-    ConceptProgress, ConceptView, DayView, DeckView, DraftInput, DraftOutcome, Event, KeyView, NextStep,
+    ConceptProgress, ConceptView, DayView, DeckView, DisputeView, DraftInput, DraftOutcome, Event, KeyView, NextStep,
     OptionFeedback, OutcomeProgress, OutcomeStanding, OutcomeView, ProgressView, ProviderView, Reply, Role, RolesView,
     SettingsView, SlotView, SourceView, StateCounts, SummaryView, TodayView, TopicSummary, TopicView,
 };
@@ -181,6 +181,12 @@ impl App {
             Command::GetConcept { concept_id } => self.open_concept(&concept_id).map(Reply::Concept),
             Command::FindSources { concept_id } => self.find_again(&concept_id).map(Reply::Concept),
             Command::MarkStudied { concept_id } => self.mark_studied(&concept_id).map(Reply::Concept),
+            Command::Dispute { attempt_id } => {
+                let reply = self.dispute(&attempt_id).map(Reply::Disputed);
+                // The slot is short now: write its replacement.
+                self.wake_bank();
+                reply
+            }
         }
     }
 }

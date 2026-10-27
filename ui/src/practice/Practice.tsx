@@ -1,9 +1,10 @@
-import { ArrowRight, X } from "lucide-react";
+import { ArrowRight, Flag, X } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { AnswerView } from "../bindings/AnswerView";
 import type { CardView } from "../bindings/CardView";
 import type { DeckView } from "../bindings/DeckView";
+import type { DisputeView } from "../bindings/DisputeView";
 import { ConceptMark, STATE_WORD } from "../components/ConceptMark";
 import { Reveal } from "../components/Reveal";
 import { Screen } from "../components/Screen";
@@ -133,6 +134,9 @@ function Card({
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // "This key is wrong": looking again first, then set aside.
+  const [confirming, setConfirming] = useState(false);
+  const [disputed, setDisputed] = useState<DisputeView | null>(null);
 
   const choose = useCallback(
     (i: number) => {
@@ -270,7 +274,32 @@ function Card({
             exit="gone"
             className="flex flex-col gap-2 text-sm"
           >
-            <Feedback answer={answer} />
+            <AnimatePresence mode="wait" initial={false}>
+              {disputed ? (
+                <SetAside key="aside" disputed={disputed} />
+              ) : (
+                <motion.div key="feedback" variants={stage(0.07, 0)} className="flex flex-col gap-2">
+                  <Feedback answer={answer} />
+                </motion.div>
+              )}
+            </AnimatePresence>
+            <AnimatePresence>
+              {confirming && !disputed && (
+                <LookAgain
+                  key="look"
+                  answer={answer}
+                  onKeep={() => setConfirming(false)}
+                  onDispute={() =>
+                    call({ type: "dispute", attempt_id: answer.attempt_id })
+                      .then((d) => {
+                        setDisputed(d);
+                        setConfirming(false);
+                      })
+                      .catch((e: Error) => setError(e.message))
+                  }
+                />
+              )}
+            </AnimatePresence>
             <motion.div variants={motionButton} className="flex items-center gap-3 pt-1">
               <button
                 type="button"
@@ -280,11 +309,81 @@ function Card({
                 {last ? "Finish" : "Next"} <ArrowRight size={14} aria-hidden />
               </button>
               <span className="text-xs text-ink-4">or press Enter</span>
+              <span className="flex-1" />
+              {!disputed && !confirming && (
+                <button
+                  type="button"
+                  onClick={() => setConfirming(true)}
+                  className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-ink-4 transition-colors hover:bg-raised hover:text-ink"
+                >
+                  <Flag size={12} aria-hidden /> This key is wrong
+                </button>
+              )}
             </motion.div>
           </motion.div>
         )}
       </AnimatePresence>
     </motion.section>
+  );
+}
+
+// A moment to look again before disputing: kizn's key and its reason. Right
+// after a miss it's natural to blame the question; this catches that
+// without stopping a real dispute.
+function LookAgain({ answer, onKeep, onDispute }: { answer: AnswerView; onKeep: () => void; onDispute: () => void }) {
+  const key = answer.options[answer.key];
+  return (
+    <motion.div
+      variants={stage(0.06, 0)}
+      initial="hidden"
+      animate="shown"
+      exit="gone"
+      role="group"
+      aria-label="Look again"
+      className="flex flex-col gap-2 rounded-xl bg-warn/[0.06] px-4 py-3 ring-1 ring-warn/25"
+    >
+      <motion.p variants={pop} className="text-xs text-ink-3">
+        kizn's key is <span className="font-medium text-ink">{LETTERS[answer.key]}</span>: {key?.why}
+      </motion.p>
+      <motion.div variants={pop} className="flex flex-wrap items-center gap-2">
+        <span className="text-sm text-ink-2">Still think the key is wrong?</span>
+        <span className="flex-1" />
+        <button
+          type="button"
+          onClick={onKeep}
+          className="rounded-md px-2.5 py-1 text-xs text-ink-3 transition-colors hover:bg-raised hover:text-ink"
+        >
+          Keep it
+        </button>
+        <button
+          type="button"
+          onClick={onDispute}
+          className="rounded-md bg-warn/15 px-2.5 py-1 text-xs font-medium text-warn transition-colors hover:bg-warn/25"
+        >
+          Yes, set it aside
+        </button>
+      </motion.div>
+    </motion.div>
+  );
+}
+
+// After a dispute: the answer doesn't count, the question is gone, and a
+// replacement is on its way.
+function SetAside({ disputed }: { disputed: DisputeView }) {
+  return (
+    <motion.div variants={stage(0.07, 0)} initial="hidden" animate="shown" exit="gone" className="flex flex-col gap-2">
+      <motion.p variants={pop} className="text-ink-2">
+        Set aside. This answer doesn't count, and the question won't come back; kizn will write another.
+      </motion.p>
+      {disputed.concepts.map((c) => (
+        <motion.p key={c.concept} variants={pop} className="flex items-center gap-1.5 text-xs text-ink-3">
+          <span className="text-ink-4">
+            <ConceptMark state={c.after} size={12} />
+          </span>
+          {c.concept}: {STATE_WORD[c.after] ?? c.after}
+        </motion.p>
+      ))}
+    </motion.div>
   );
 }
 

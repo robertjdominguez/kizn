@@ -437,6 +437,28 @@ impl Store {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
+    /// The learner says an answer's question has the wrong key: the answer
+    /// stops counting and the question is retired as disputed. One
+    /// transaction. Returns the item's id.
+    pub fn dispute(&self, attempt_id: &str, at: &str) -> Result<Option<String>> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        let item: Option<String> =
+            tx.query_row("SELECT item_id FROM attempts WHERE id = ?1", [attempt_id], |r| r.get(0)).optional()?;
+        if let Some(item) = &item {
+            tx.execute(
+                "UPDATE attempts SET disputed_at = ?2 WHERE id = ?1 AND disputed_at IS NULL",
+                params![attempt_id, at],
+            )?;
+            tx.execute(
+                "UPDATE items SET status = 'disputed', status_reason = 'disputed: the learner says the key is wrong' WHERE id = ?1",
+                [item],
+            )?;
+        }
+        tx.commit()?;
+        Ok(item)
+    }
+
     pub fn mark_studied(&self, concept_id: &str, at: &str) -> Result<()> {
         self.conn.lock().unwrap().execute(
             "INSERT INTO studied (concept_id, at) VALUES (?1, ?2) ON CONFLICT (concept_id) DO UPDATE SET at = ?2",

@@ -104,6 +104,11 @@ pub enum Command {
     MarkStudied {
         concept_id: String,
     },
+    /// "This key is wrong": the answer stops counting, the question is
+    /// retired, and a replacement is written for its slot.
+    Dispute {
+        attempt_id: String,
+    },
 }
 
 /// A draft as the learner shaped it.
@@ -140,6 +145,16 @@ pub enum Reply {
     Summary(SummaryView),
     Progress(ProgressView),
     Concept(ConceptPageView),
+    Disputed(DisputeView),
+}
+
+/// After a dispute: each concept the question named, back where it was
+/// before the answer.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct DisputeView {
+    pub attempt_id: String,
+    pub concepts: Vec<ConceptChange>,
 }
 
 /// A concept to study: what it says, where it sits, and the sources kizn
