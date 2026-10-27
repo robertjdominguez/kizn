@@ -52,13 +52,29 @@ function Read({ sourceId, onClose }: { sourceId: string; onClose: () => void }) 
   const [talks, recount] = useConversations({ kind: "resource", source_id: sourceId });
   // Text selected in the article, and where to offer "Ask about this".
   const [picked, setPicked] = useState<{ text: string; x: number; y: number } | null>(null);
-  const pick = () => {
-    const sel = window.getSelection();
-    const text = sel?.toString().trim() ?? "";
-    if (!sel || text.split(/\s+/).length < 3 || sel.rangeCount === 0) return setPicked(null);
-    const rect = sel.getRangeAt(0).getBoundingClientRect();
-    setPicked({ text: text.slice(0, 600), x: rect.left + rect.width / 2, y: rect.top });
-  };
+  const article = useRef<HTMLElement>(null);
+  // Follows the selection itself (mouse, keyboard or touch), a moment after
+  // it settles; only text selected inside the article counts.
+  useEffect(() => {
+    let t: ReturnType<typeof setTimeout> | undefined;
+    const pick = () => {
+      const sel = window.getSelection();
+      const text = sel?.toString().trim() ?? "";
+      const inside = !!sel?.anchorNode && !!article.current?.contains(sel.anchorNode);
+      if (!sel || !inside || text.split(/\s+/).length < 3 || sel.rangeCount === 0) return setPicked(null);
+      const rect = sel.getRangeAt(0).getBoundingClientRect();
+      setPicked({ text: text.slice(0, 600), x: rect.left + rect.width / 2, y: Math.max(rect.top, 56) });
+    };
+    const onChange = () => {
+      clearTimeout(t);
+      t = setTimeout(pick, 150);
+    };
+    document.addEventListener("selectionchange", onChange);
+    return () => {
+      clearTimeout(t);
+      document.removeEventListener("selectionchange", onChange);
+    };
+  }, []);
 
   useEffect(() => {
     call({ type: "get_resource", source_id: sourceId })
@@ -113,7 +129,7 @@ function Read({ sourceId, onClose }: { sourceId: string; onClose: () => void }) 
             animate="shown"
             className="mx-auto grid w-full max-w-5xl grid-cols-1 gap-10 px-6 py-8 lg:grid-cols-[minmax(0,1fr)_16rem]"
           >
-            <article className="flex min-w-0 flex-col gap-6" onMouseUp={pick}>
+            <article ref={article} className="flex min-w-0 flex-col gap-6">
               <motion.div variants={pop} className="flex flex-col gap-2 border-b border-hairline pb-5">
                 <p className="text-[11px] font-semibold uppercase tracking-wider text-accent">
                   {video ? "Watching for" : "Reading for"}
