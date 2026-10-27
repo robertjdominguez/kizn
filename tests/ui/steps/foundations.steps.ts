@@ -7,9 +7,9 @@ import { bridge, Given, Then, When, type World } from "./fixtures";
 // Foundations: proposed at setup, checked, flagged from misses, and drawn on
 // the map. Keys for check questions are read from the scenario's database.
 
-function db(world: World, readOnly = true) {
+function db(world: World) {
   if (!world.dataDir) throw new Error("no data directory");
-  return new DatabaseSync(join(world.dataDir, "kizn.db"), { readOnly });
+  return new DatabaseSync(join(world.dataDir, "kizn.db"), { readOnly: true });
 }
 
 const keepBox = (page: Page, title: string) => page.getByRole("checkbox", { name: `Keep ${title}` });
@@ -138,13 +138,11 @@ Then("the flag is gone and {string} is suggested on my map", async ({ page }, ti
 
 // ---- the map ----------------------------------------------------------------------------
 
-Given("{string} is suggested under {string}", async ({ world }, title: string, upper: string) => {
-  const d = db(world, false);
-  const row = d.prepare("SELECT id FROM topics WHERE title = ?").get(upper) as { id: string };
-  d.prepare(
-    "INSERT INTO suggestions (id, for_topic, title, why, source, status, topic_id, created_at) VALUES (?, ?, ?, ?, 'flag', 'later', NULL, '2026-10-25 09:00:00')",
-  ).run("01SUGGESTION00000000000001", row.id, title, "services talk over ports");
-  d.close();
+// Seeded through the bridge, whose connection waits for the database
+// rather than finding it locked.
+Given("{string} is suggested under {string}", async ({ page }, _title: string, _upper: string) => {
+  const res = await page.request.post(`${bridge()}/test/seed`, { data: { fixture: "map-suggestion" } });
+  expect(res.ok(), await res.text()).toBeTruthy();
 });
 
 When("I open the map", async ({ page }) => {
