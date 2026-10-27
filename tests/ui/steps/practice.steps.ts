@@ -126,6 +126,8 @@ Then("I first see how concepts move from not started to stuck", async ({ page })
 
 Then("that the starting point is about finding where I am", async ({ page }) => {
   await page.getByRole("button", { name: /Next/ }).click();
+  await expect(page.getByRole("heading", { name: "Some misses point deeper" })).toBeVisible();
+  await page.getByRole("button", { name: /Next/ }).click();
   await expect(page.getByRole("heading", { name: "First, find where you're starting" })).toBeVisible();
   await expect(page.getByText(/Misses are fine/)).toBeVisible();
 });

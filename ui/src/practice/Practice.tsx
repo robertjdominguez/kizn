@@ -17,7 +17,7 @@ const verdictYes = {
   gone: { opacity: 0 },
 };
 
-import { call } from "../rpc";
+import { call, type TopicView } from "../rpc";
 import { type Starter, TutorSheet } from "../tutor/TutorSheet";
 import { Onboarding } from "./Onboarding";
 import { Summary } from "./Summary";
@@ -32,7 +32,9 @@ export function Practice({ topicId }: { topicId?: string }) {
   const [error, setError] = useState<string | null>(null);
   const [at, setAt] = useState(0);
   // A topic's first set opens on two cards saying how it works.
-  const [intro, setIntro] = useState<0 | 1 | null>(null);
+  const [intro, setIntro] = useState<0 | 1 | 2 | null>(null);
+  // For the onboarding's map card: the topic and what it rests on.
+  const [introTopic, setIntroTopic] = useState<TopicView | null>(null);
   const [answers, setAnswers] = useState<AnswerView[]>([]);
   const back = topicId ? `#/topic/${encodeURIComponent(topicId)}` : "#/";
 
@@ -40,11 +42,17 @@ export function Practice({ topicId }: { topicId?: string }) {
     call({ type: "start_practice", topic_id: topicId })
       .then((d) => {
         setDeck(d);
-        if (d.first_set) setIntro(0);
+        if (d.first_set) {
+          setIntro(0);
+          if (topicId)
+            call({ type: "get_topic", topic_id: topicId })
+              .then(setIntroTopic)
+              .catch(() => undefined);
+        }
       })
       .catch((e: Error) => setError(e.message));
   }, [topicId]);
-  const introNext = useCallback(() => setIntro((i) => (i === 0 ? 1 : null)), []);
+  const introNext = useCallback(() => setIntro((i) => (i === 0 ? 1 : i === 1 ? 2 : null)), []);
   const introSkip = useCallback(() => setIntro(null), []);
 
   const card = deck?.cards[at];
@@ -100,6 +108,7 @@ export function Practice({ topicId }: { topicId?: string }) {
             key={`intro-${intro}`}
             step={intro}
             count={deck.cards.length}
+            topic={introTopic}
             onNext={introNext}
             onSkip={introSkip}
           />

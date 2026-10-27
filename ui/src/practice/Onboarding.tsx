@@ -3,6 +3,7 @@ import { motion } from "motion/react";
 import { useEffect } from "react";
 import { ConceptMark } from "../components/ConceptMark";
 import { bead, deal, button as landing, pop, popAfter, stage } from "../motion";
+import type { TopicView } from "../rpc";
 
 // Before a topic's first set: how concepts move from new to stuck, and what
 // the starting point is for. Never names a concept (that would give the first
@@ -23,10 +24,13 @@ const TONE: Record<string, string> = {
 export function Onboarding({
   step,
   count,
+  topic,
   onNext,
   onSkip,
 }: {
-  step: 0 | 1;
+  step: 0 | 1 | 2;
+  /** The topic, to show where it sits on the map (absent across topics). */
+  topic?: TopicView | null;
   count: number;
   onNext: () => void;
   onSkip: () => void;
@@ -54,7 +58,7 @@ export function Onboarding({
       className="flex flex-col gap-6 rounded-2xl bg-subtle px-7 py-7 ring-1 ring-hairline"
     >
       <motion.p variants={pop} className="text-[11px] font-semibold uppercase tracking-wider text-accent">
-        Before you start · {step + 1} of 2
+        Before you start · {step + 1} of 3
       </motion.p>
       {step === 0 ? (
         <>
@@ -83,6 +87,17 @@ export function Onboarding({
             is ready when its concepts have stuck and you can use them together.
           </motion.p>
         </>
+      ) : step === 1 ? (
+        <>
+          <motion.h2 variants={pop} id="intro-title" className="text-xl font-semibold tracking-tight text-ink">
+            Some misses point deeper
+          </motion.h2>
+          <Deeper topic={topic} />
+          <motion.p variants={popAfter(0.9)} className="text-sm text-ink-2">
+            Sometimes a miss is really about something more basic. When several point the same way, kizn says so, on
+            Today and on the topic, and you decide whether to add it underneath. Your map shows what rests on what.
+          </motion.p>
+        </>
       ) : (
         <>
           <motion.h2 variants={pop} id="intro-title" className="text-xl font-semibold tracking-tight text-ink">
@@ -104,7 +119,7 @@ export function Onboarding({
       )}
       <motion.div variants={landing} className="flex items-center gap-3">
         <button type="button" onClick={onNext} className={cta}>
-          {step === 0 ? (
+          {step < 2 ? (
             <>
               Next <ArrowRight size={14} aria-hidden />
             </>
@@ -127,5 +142,42 @@ export function Onboarding({
         )}
       </motion.div>
     </motion.section>
+  );
+}
+
+// The topic as one node on the map, with what it really rests on beneath it,
+// or honest empty space where foundations will show if misses point there.
+function Deeper({ topic }: { topic?: TopicView | null }) {
+  const below = topic?.rests_on ?? [];
+  return (
+    <motion.div variants={stage(0.15, 0.1)} className="flex flex-col items-center gap-0 py-2" aria-hidden>
+      <motion.div
+        variants={pop}
+        className="rounded-xl bg-canvas px-4 py-2.5 text-sm font-medium text-ink ring-1 ring-accent/40"
+      >
+        {topic?.title ?? "Your topic"}
+      </motion.div>
+      <motion.span variants={pop} className="h-6 w-px bg-overlay" />
+      {below.length > 0 ? (
+        <motion.div variants={stage(0.1, 0)} className="flex flex-wrap justify-center gap-2">
+          {below.map((l) => (
+            <motion.span
+              key={l.link_id}
+              variants={bead}
+              className="rounded-lg bg-subtle px-3 py-1.5 text-xs text-ink-2 ring-1 ring-hairline"
+            >
+              {l.title}
+            </motion.span>
+          ))}
+        </motion.div>
+      ) : (
+        <motion.p
+          variants={pop}
+          className="max-w-xs rounded-xl border border-dashed border-ink-4/50 px-4 py-2.5 text-center text-xs text-ink-4"
+        >
+          Nothing underneath yet. If your answers point at something more basic, it shows up here.
+        </motion.p>
+      )}
+    </motion.div>
   );
 }

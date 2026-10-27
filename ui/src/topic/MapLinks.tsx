@@ -39,6 +39,17 @@ export function MapLinks({ topic: t }: { topic: TopicView }) {
     call({ type: "unlink", link_id: l.link_id }).catch((e: Error) => setError(e.message));
   };
 
+  // Foundations set aside for later (from the check or a flag): dashed
+  // suggestions, to start or dismiss.
+  const suggested = t.foundations.filter((f) => f.status === "later" && !f.topic_id);
+  const resolve = (id: string, action: "start" | "dismiss") => {
+    call({ type: "resolve_foundation", suggestion_id: id, action })
+      .then((started) => {
+        if (action === "start") window.location.hash = `#/setup/${encodeURIComponent(started.id)}`;
+      })
+      .catch((e: Error) => setError(e.message));
+  };
+
   const groups: [string, LinkedTopic[]][] = [
     ["Rests on", t.rests_on],
     ["Supports", t.supports],
@@ -75,6 +86,36 @@ export function MapLinks({ topic: t }: { topic: TopicView }) {
             ))}
           </div>
         ))}
+      {suggested.length > 0 && (
+        <div className="flex flex-col gap-0.5">
+          <p className="text-[11px] text-ink-4">Suggested underneath</p>
+          {suggested.map((f) => (
+            <div key={f.id} className="group flex items-center gap-1.5">
+              <span
+                className="min-w-0 flex-1 truncate border-b border-dashed border-ink-4/50 text-sm text-ink-3"
+                title={f.why ?? undefined}
+              >
+                {f.title}
+              </span>
+              <button
+                type="button"
+                onClick={() => resolve(f.id, "start")}
+                className="shrink-0 text-[11px] text-accent hover:underline"
+              >
+                Start it
+              </button>
+              <button
+                type="button"
+                onClick={() => resolve(f.id, "dismiss")}
+                aria-label={`Dismiss ${f.title}`}
+                className="shrink-0 text-ink-4 opacity-0 transition-opacity hover:text-ink group-hover:opacity-100 focus-visible:opacity-100"
+              >
+                <X size={12} aria-hidden />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
       <div className="flex flex-wrap gap-1.5">
         {(
           [

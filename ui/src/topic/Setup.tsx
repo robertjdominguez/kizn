@@ -24,6 +24,7 @@ import { subscribe } from "../events";
 import { settingsCanFix } from "../fixable";
 import { EASE, presence, rise } from "../motion";
 import { call, type TopicView } from "../rpc";
+import { FoundationsEditor } from "./FoundationsEditor";
 
 // Starting a topic, one card per step under the progress line: Goal → Draft
 // → Shape → Confirm, then the topic page. The author model drafts; the
@@ -575,6 +576,8 @@ function ShapeStep({ topic, onContinue }: { topic: TopicView; onContinue: () => 
         <Plus size={14} aria-hidden /> Add an outcome
       </button>
 
+      <FoundationsEditor topic={topic} />
+
       <AnimatePresence>
         {error && (
           <motion.p
@@ -731,12 +734,16 @@ function ConfirmStep({ topic, onBack }: { topic: TopicView; onBack: () => void }
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const concepts = topic.outcomes.reduce((n, o) => n + o.concepts.length, 0);
+  const toCheck = topic.foundations.filter((f) => f.source === "draft" && f.status === "kept" && !f.topic_id);
+  const linking = topic.foundations.filter((f) => f.source === "draft" && f.status === "kept" && f.topic_id);
   const confirm = async () => {
     setBusy(true);
     setError(null);
     try {
       await call({ type: "confirm_topic", topic_id: topic.id });
-      window.location.hash = `#/topic/${encodeURIComponent(topic.id)}`;
+      // New foundations kept: check the ground next; otherwise the topic.
+      window.location.hash =
+        toCheck.length > 0 ? `#/check/${encodeURIComponent(topic.id)}` : `#/topic/${encodeURIComponent(topic.id)}`;
     } catch (e) {
       setError((e as Error).message);
       setBusy(false);
@@ -769,6 +776,14 @@ function ConfirmStep({ topic, onBack }: { topic: TopicView; onBack: () => void }
         <p className="mt-3 border-t border-hairline pt-2 text-xs text-ink-3">
           {topic.outcomes.length} outcomes · {concepts} concepts · about {topic.expected} practice questions to prepare
         </p>
+        {(toCheck.length > 0 || linking.length > 0) && (
+          <p className="mt-2 text-xs text-ink-3">
+            {linking.length > 0 && <>Rests on {linking.map((f) => f.title).join(", ")}. </>}
+            {toCheck.length > 0 && (
+              <>Next, a few questions on {toCheck.map((f) => f.title).join(" and ")}, to check the ground.</>
+            )}
+          </p>
+        )}
       </div>
       <AnimatePresence>
         {error && (

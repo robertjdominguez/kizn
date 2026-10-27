@@ -44,6 +44,12 @@ const REPLY = {
   get_reading_list: "reading_list",
   link_topics: "done",
   unlink: "done",
+  keep_foundation: "topic",
+  get_ground: "ground",
+  answer_ground: "ground",
+  resolve_foundation: "topic",
+  get_map: "map",
+  resolve_flag: "topic",
   save_note: "note",
   add_source: "concept",
 } as const satisfies Record<Command["type"], Reply["type"]>;

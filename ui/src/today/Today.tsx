@@ -11,6 +11,7 @@ import { bead, EASE, button as landing, pop, popStage, SPRING, stage } from "../
 import { whenDue } from "../practice/Summary";
 import { call, type TodayView } from "../rpc";
 import { ReadingList } from "../study/ReadingList";
+import { Flags } from "../topic/Flags";
 
 // Home. Calm first, then one invitation: a greeting, the one next step
 // (warm, with how small it is), the week so far, and your topics, quieter.
@@ -91,6 +92,8 @@ export function Today() {
         </AnimatePresence>
 
         <Hero step={today.next} onRead={() => setReading(true)} />
+
+        <Flags flags={today.flags} showTopic />
 
         <AnimatePresence>{practisedEver && <Week key="week" today={today} />}</AnimatePresence>
 
@@ -365,6 +368,7 @@ const MAX_MARKS = 20;
 
 function topicStatus(t: TopicSummary): ReactNode {
   if (t.status === "draft") return "Draft · finish setting it up";
+  if (t.states.length === 0) return "Nothing to practise yet";
   const due = Number(t.due_now);
   const fresh = Number(t.new_now);
   if (!t.practised) return due + fresh > 0 ? <span className="text-peach">Ready to start</span> : "Writing questions…";

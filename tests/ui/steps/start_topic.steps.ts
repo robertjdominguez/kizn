@@ -102,11 +102,18 @@ When("I rename a concept, delete an outcome and change a target to {string}", as
   await expect(page.getByText("Saved")).toBeVisible({ timeout: 5000 });
 });
 
+/** Confirms, then leaves checking the ground for later (the draft keeps its
+ *  foundations), landing on the topic. */
+async function confirmAndSkipCheck(page: Page) {
+  await page.getByRole("button", { name: "Confirm" }).click();
+  await page.getByRole("link", { name: "Finish later" }).click();
+  await expect(page.getByRole("heading", { name: "Your concepts" })).toBeVisible();
+}
+
 When("I confirm the topic", async ({ page }) => {
   await page.getByRole("button", { name: "Continue" }).click();
   await expect(page.getByRole("heading", { name: "Ready to prepare your practice?" })).toBeVisible();
-  await page.getByRole("button", { name: "Confirm" }).click();
-  await expect(page.getByRole("heading", { name: "Your concepts" })).toBeVisible();
+  await confirmAndSkipCheck(page);
 });
 
 Then("bank writing is queued for each outcome", async ({ page }) => {
@@ -121,8 +128,7 @@ Then("the topic page says its questions are being written", async ({ page }) => 
 Given("a confirmed topic whose bank is being written", async ({ page, world }) => {
   await startTopic(page, world, "Container fundamentals", "explain to customers why deployments behave differently");
   await page.getByRole("button", { name: "Continue" }).click();
-  await page.getByRole("button", { name: "Confirm" }).click();
-  await expect(page.getByRole("heading", { name: "Your concepts" })).toBeVisible();
+  await confirmAndSkipCheck(page);
 });
 
 When("I open Today", async ({ page }) => {
