@@ -9,9 +9,10 @@ pub mod deck;
 pub mod id;
 pub mod progress;
 pub mod rng;
+pub mod source;
 pub mod tier;
 
-pub use clock::{Clock, FakeClock, SystemClock, sql_time};
+pub use clock::{Clock, FakeClock, ShiftedClock, SystemClock, parse_sql_time, sql_time};
 pub use id::new_id;
 pub use rng::{Rng, SeededRng};
 pub use tier::Tier;

@@ -3,7 +3,9 @@
 //!
 //! 1. Due recalls, oldest first, at most DAILY_RECALL_CAP a day.
 //! 2. Placement: one recall question per concept never answered on the
-//!    outcome being worked (the first, in order, with one), up to MAX_NEW.
+//!    outcome being worked (the first, in order, with one), up to MAX_NEW new
+//!    concepts a day (a first set is enough new material for one sitting;
+//!    spacing beats massing).
 //!
 //! Apply, target, explain and judge cards arrive with later phases, in their
 //! places after these. Question choice per concept: never shown first, else
@@ -67,9 +69,17 @@ pub fn pick<'a>(candidates: &'a [Candidate], now: DateTime<Utc>, used: &[String]
     ok.iter().find(|c| c.last_shown.is_none()).copied().or_else(|| ok.iter().min_by_key(|c| c.last_shown).copied())
 }
 
+/// How much was already practised today, for the daily caps.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Today {
+    /// Recall answers that weren't a concept's first.
+    pub recalls: usize,
+    /// Concepts first answered today.
+    pub new: usize,
+}
+
 /// The set: due recalls, then placement on the outcome being worked.
-/// `recalls_today` is how many recall answers were already given today.
-pub fn compose(outcomes: &[DeckOutcome], recalls_today: usize, now: DateTime<Utc>) -> Vec<DeckCard> {
+pub fn compose(outcomes: &[DeckOutcome], today: Today, now: DateTime<Utc>) -> Vec<DeckCard> {
     let mut cards: Vec<DeckCard> = vec![];
     let mut used: Vec<String> = vec![];
 
@@ -80,7 +90,7 @@ pub fn compose(outcomes: &[DeckOutcome], recalls_today: usize, now: DateTime<Utc
         .filter(|(_, c)| c.standing.state != ConceptState::Unseen && c.standing.due.is_some_and(|d| d <= now))
         .collect();
     due.sort_by_key(|(_, c)| c.standing.due);
-    let mut room = DAILY_RECALL_CAP.saturating_sub(recalls_today);
+    let mut room = DAILY_RECALL_CAP.saturating_sub(today.recalls);
     for (o, c) in due {
         if room == 0 || cards.len() >= MAX_CARDS {
             break;
@@ -103,7 +113,7 @@ pub fn compose(outcomes: &[DeckOutcome], recalls_today: usize, now: DateTime<Utc
         o.concepts.iter().any(|c| c.standing.state == ConceptState::Unseen && pick(&c.recall, now, &used).is_some())
     });
     if let Some(o) = working {
-        let mut fresh = 0;
+        let mut fresh = today.new;
         for c in o.concepts.iter().filter(|c| c.standing.state == ConceptState::Unseen) {
             if fresh >= MAX_NEW || cards.len() >= MAX_CARDS {
                 break;
@@ -148,7 +158,7 @@ mod tests {
             id: "o1".into(),
             concepts: (0..7).map(|i| concept(&format!("c{i}"), &[], &[&format!("q{i}a"), &format!("q{i}b")])).collect(),
         };
-        let cards = compose(&[o], 0, now());
+        let cards = compose(&[o], Today::default(), now());
         assert_eq!(cards.len(), MAX_NEW);
         assert!(cards.iter().all(|c| c.reason == Reason::New));
         let concepts: std::collections::HashSet<_> = cards.iter().map(|c| &c.concept_id).collect();
@@ -164,7 +174,7 @@ mod tests {
         };
         let mut o = o;
         o.concepts[0].recall[0].last_shown = Some(now() - Duration::days(4));
-        let cards = compose(&[o], 0, now());
+        let cards = compose(&[o], Today::default(), now());
         assert_eq!(
             cards[0],
             DeckCard { item_id: "q0b".into(), concept_id: "c0".into(), outcome_id: "o1".into(), reason: Reason::Due }
@@ -181,8 +191,18 @@ mod tests {
                 .map(|i| concept(&format!("c{i}"), &[due(i)], &[&format!("q{i}"), &format!("r{i}")]))
                 .collect(),
         };
-        assert_eq!(compose(std::slice::from_ref(&o), 0, now()).len(), DAILY_RECALL_CAP);
-        assert_eq!(compose(&[o], 8, now()).len(), 2);
+        assert_eq!(compose(std::slice::from_ref(&o), Today::default(), now()).len(), DAILY_RECALL_CAP);
+        assert_eq!(compose(&[o], Today { recalls: 8, new: 0 }, now()).len(), 2);
+    }
+
+    #[test]
+    fn new_concepts_share_a_daily_allowance() {
+        let o = DeckOutcome {
+            id: "o1".into(),
+            concepts: (0..7).map(|i| concept(&format!("c{i}"), &[], &[&format!("q{i}")])).collect(),
+        };
+        assert_eq!(compose(std::slice::from_ref(&o), Today { recalls: 0, new: 3 }, now()).len(), 2);
+        assert!(compose(&[o], Today { recalls: 0, new: MAX_NEW }, now()).is_empty());
     }
 
     #[test]
