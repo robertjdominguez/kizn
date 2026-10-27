@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { type FormEvent, useCallback, useEffect, useRef, useState } from "react";
+import { Confirm } from "../components/Confirm";
 import { Progress, type ProgressStep } from "../components/Progress";
 import { Reveal } from "../components/Reveal";
 import { Screen } from "../components/Screen";
@@ -94,6 +95,7 @@ export function Setup({ topicId, foundation }: { topicId?: string; foundation?: 
           {step === 3 && topic && <ConfirmStep topic={topic} onBack={() => setStep(2)} />}
         </motion.div>
       </AnimatePresence>
+      <AnimatePresence>{topic && step > 0 && <DiscardDraft key="discard" topic={topic} />}</AnimatePresence>
     </Screen>
   );
 }
@@ -841,5 +843,35 @@ function ConfirmStep({ topic, onBack }: { topic: TopicView; onBack: () => void }
         </button>
       </div>
     </div>
+  );
+}
+
+// A draft that won't be finished: discarded, asked first, so Today doesn't
+// keep offering to finish it.
+function DiscardDraft({ topic }: { topic: TopicView }) {
+  const [asking, setAsking] = useState(false);
+  const close = useCallback(() => setAsking(false), []);
+  return (
+    <motion.div variants={rise} {...presence} className="pt-3">
+      <button
+        type="button"
+        onClick={() => setAsking(true)}
+        className="flex items-center gap-1.5 rounded px-1 py-0.5 text-xs text-ink-4 transition-colors hover:text-danger"
+      >
+        <Trash2 size={12} aria-hidden /> Discard draft
+      </button>
+      <Confirm
+        open={asking}
+        title={`Discard ${topic.title}?`}
+        action="Discard draft"
+        onClose={close}
+        onConfirm={async () => {
+          await call({ type: "delete_topic", topic_id: topic.id });
+          window.location.hash = "#/";
+        }}
+      >
+        Its outcomes and concepts go with it. You can start the topic again any time.
+      </Confirm>
+    </motion.div>
   );
 }

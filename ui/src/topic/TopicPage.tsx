@@ -1,9 +1,20 @@
-import { BookOpen, Check, ChevronDown, ChevronLeft, ChevronRight, LoaderCircle, Play, RotateCw } from "lucide-react";
+import {
+  BookOpen,
+  Check,
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  LoaderCircle,
+  Play,
+  RotateCw,
+  Trash2,
+} from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useCallback, useEffect, useState } from "react";
 import type { ConceptView } from "../bindings/ConceptView";
 import type { OutcomeView } from "../bindings/OutcomeView";
 import { ConceptMark } from "../components/ConceptMark";
+import { Confirm } from "../components/Confirm";
 import { Reveal } from "../components/Reveal";
 import { Screen } from "../components/Screen";
 import { Stage } from "../components/Stage";
@@ -91,7 +102,7 @@ export function TopicPage({ topicId, from }: { topicId: string; from?: "map" }) 
             <LearnThese topic={confirmed} onOpen={setConcept} />
             <YourConcepts topic={confirmed} onOpen={setConcept} />
           </motion.div>
-          <Sidebar topic={confirmed} />
+          <Sidebar topic={confirmed} from={from} />
         </Stage>
       )}
       <ConceptSheet conceptId={concept} onClose={closeConcept} />
@@ -384,7 +395,7 @@ function OutcomeLine({
 
 // The quiet rest: the goal, the counts at a glance, and kizn's question
 // writing (which only asks for attention when it's stuck).
-function Sidebar({ topic: t }: { topic: TopicView }) {
+function Sidebar({ topic: t, from }: { topic: TopicView; from?: "map" }) {
   const all = concepts(t);
   const count = (s: string) => all.filter((c) => c.state === s).length;
   const rows: [string, number, string][] = [
@@ -447,6 +458,7 @@ function Sidebar({ topic: t }: { topic: TopicView }) {
         </AnimatePresence>
       </motion.div>
       <MapLinks topic={t} />
+      <DeleteTopic topic={t} back={from === "map" ? "#/map" : "#/"} />
     </motion.aside>
   );
 }
@@ -543,6 +555,36 @@ function Stuck({ outcome: o }: { outcome: OutcomeView }) {
       <Reveal when={error}>
         <p className="text-danger">{error}</p>
       </Reveal>
+    </motion.div>
+  );
+}
+
+// Letting the topic go, quietly at the foot of the sidebar, asked first.
+function DeleteTopic({ topic: t, back }: { topic: TopicView; back: string }) {
+  const [asking, setAsking] = useState(false);
+  const close = useCallback(() => setAsking(false), []);
+  return (
+    <motion.div variants={pop}>
+      <button
+        type="button"
+        onClick={() => setAsking(true)}
+        className="flex items-center gap-1.5 rounded px-1 py-0.5 text-xs text-ink-4 transition-colors hover:text-danger"
+      >
+        <Trash2 size={12} aria-hidden /> Delete topic
+      </button>
+      <Confirm
+        open={asking}
+        title={`Delete ${t.title}?`}
+        action="Delete topic"
+        onClose={close}
+        onConfirm={async () => {
+          await call({ type: "delete_topic", topic_id: t.id });
+          window.location.hash = back;
+        }}
+      >
+        Its questions, your practice, reading and notes go with it, and this can't be undone. Topics it's linked to stay
+        on your map.
+      </Confirm>
     </motion.div>
   );
 }
