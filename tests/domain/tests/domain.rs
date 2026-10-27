@@ -1718,7 +1718,11 @@ async fn run() {
     let features = concat!(env!("CARGO_MANIFEST_DIR"), "/../../features");
     let extra = std::env::var("KIZN_BDD_TAG").ok().filter(|t| !t.is_empty());
     let extra = extra.map(|t| t.trim_start_matches('@').to_string());
+    // A few at a time: scenarios share the machine with the fake model
+    // server, and a small CI runner starved it when 64 ran at once.
+    let at_once = std::env::var("KIZN_BDD_AT_ONCE").ok().and_then(|n| n.parse().ok()).unwrap_or(8);
     Kizn::cucumber()
+        .max_concurrent_scenarios(at_once)
         .fail_on_skipped()
         .filter_run_and_exit(features, move |feature, rule, scenario| {
             let tags: Vec<&String> =
