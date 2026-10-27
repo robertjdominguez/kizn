@@ -591,6 +591,15 @@ impl FakeServer {
                     .chars()
                     .map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '-' })
                     .collect();
+                // A first round where nothing can be used (for the concept
+                // about registries): kizn should ask again.
+                let tried = input["tried"].as_array().is_some_and(|t| !t.is_empty());
+                if !tried && concept.contains("registry") {
+                    return Some(json!({ "sources": [
+                        {"url": "https://old.example.org/web/missing", "title": "Archived notes", "why": "Background reading."},
+                        {"url": "https://learn.example.com/web/shell", "title": "Interactive course", "why": "A hands-on walkthrough."},
+                    ]}));
+                }
                 Some(json!({ "sources": [
                     {"url": format!("https://docs.example.org/web/article/{slug}"), "title": format!("{concept}: the guide"), "why": "The official explanation, with a worked example."},
                     {"url": "https://old.example.org/web/missing", "title": "Archived notes", "why": "Background reading."},

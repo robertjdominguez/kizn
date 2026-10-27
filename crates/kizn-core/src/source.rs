@@ -135,13 +135,32 @@ pub fn check_text(text: &str, concept: &str) -> Result<usize, Rejected> {
     }
     let lower = text.to_lowercase();
     let terms = key_terms(concept);
-    let found = terms.iter().filter(|t| lower.contains(t.as_str())).count();
-    // At least half the key terms (at least one), so a page about something
-    // else that shares a word or two doesn't pass.
-    if found < terms.len().div_ceil(2).max(1) {
+    let found = terms.iter().filter(|t| lower.contains(stem(t))).count();
+    // Half the key terms, at least one and at most four: a page about
+    // something else that shares a word or two doesn't pass, and a long
+    // concept statement doesn't demand a page that repeats all of it.
+    if found < needed(terms.len()) {
         return Err(Rejected::OffTopic);
     }
     Ok(words)
+}
+
+/// How many of a concept's key terms a page must mention.
+pub fn needed(terms: usize) -> usize {
+    terms.div_ceil(2).clamp(1, 4)
+}
+
+/// A word without the endings that vary between its forms, so "layers"
+/// finds "layer" and "scheduled" finds "schedule".
+fn stem(word: &str) -> &str {
+    for suffix in ["ing", "ed", "es", "s"] {
+        if let Some(base) = word.strip_suffix(suffix)
+            && base.len() >= 4
+        {
+            return base;
+        }
+    }
+    word
 }
 
 /// A piece of a page for the reader: a heading, a paragraph, a list item or
@@ -472,6 +491,16 @@ mod tests {
         assert_eq!(kinds, ["h", "p", "li", "li", "pre"]);
         assert_eq!(b[1].text, "A tag is a movable name.");
         assert_eq!(b[4].text, "docker pull api:2.4");
+    }
+
+    #[test]
+    fn long_concepts_need_a_few_terms_in_any_form() {
+        assert_eq!((needed(1), needed(3), needed(8), needed(20)), (1, 2, 4, 4));
+        let concept = "In the warehouse runtime work is scheduled as opaque batch units against a shared SQL engine, whereas containers are independently scheduled";
+        let page = "The scheduler places each batch on the shared engine. Warehouses run units of work. ".repeat(20);
+        assert!(check_text(&page, concept).is_ok());
+        let off = "Tomatoes need full sun and patient watering all summer long. ".repeat(20);
+        assert_eq!(check_text(&off, concept), Err(Rejected::OffTopic));
     }
 
     #[test]

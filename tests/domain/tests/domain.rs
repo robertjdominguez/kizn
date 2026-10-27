@@ -1651,6 +1651,50 @@ async fn reading_progress(w: &mut Kizn, studied: i64, total: usize) {
     assert!(l.concepts[0].studied && !l.concepts[1].studied);
 }
 
+// --- A second look ------------------------------------------------------------------
+
+const REGISTRY: &str = "01SEEDCONCEPT00000000103";
+
+#[given("I missed the concept about registries")]
+async fn missed_registry(w: &mut Kizn) {
+    practising(w).await;
+    let n = w.deck.as_ref().unwrap().cards.len();
+    let registry_card = (0..n)
+        .find(|&i| {
+            w.store().item(&w.deck.as_ref().unwrap().cards[i].item_id).unwrap().unwrap().concept_ids[0] == REGISTRY
+        })
+        .expect("no card for the registry concept");
+    for i in 0..n {
+        w.answer_card(i, i != registry_card).await;
+    }
+}
+
+#[when("kizn looks for resources for that concept")]
+async fn looks_for_registry(w: &mut Kizn) {
+    for _ in 0..500 {
+        let c = w.concept_from(Command::GetConcept { concept_id: REGISTRY.into() }).await;
+        if c.finding != "finding" {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    panic!("still looking after 10s");
+}
+
+#[then("the first suggestions were all turned down")]
+fn first_round_down(w: &mut Kizn) {
+    let rows = w.store().sources(REGISTRY).unwrap();
+    let first: Vec<_> = rows.iter().take(2).collect();
+    assert!(first.iter().all(|r| r.status != "verified"), "{first:#?}");
+}
+
+#[then("it asked again and offers what it found")]
+fn asked_again(w: &mut Kizn) {
+    let c = w.concept.as_ref().unwrap();
+    assert_eq!(c.finding, "found");
+    assert_eq!(c.sources.len(), 3, "{:#?}", c.sources);
+}
+
 #[tokio::main]
 async fn main() {
     let features = concat!(env!("CARGO_MANIFEST_DIR"), "/../../features");

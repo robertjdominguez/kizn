@@ -24,10 +24,11 @@ const FETCH_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_PAGE_BYTES: usize = 2 * 1024 * 1024;
 
 const SUGGEST_SOURCES: &str = "kizn-task: suggest-sources
-You suggest resources an adult learner can use to learn one concept: web pages to read, and YouTube videos to watch. kizn fetches every one and only offers those it can hold as text about the concept (a page's readable text, a video's captions), so suggest resources you're confident exist at that exact URL.
-- Pick the kind that suits the concept: a short demo video for how something behaves, official documentation or a well-known reference for definitions. Prefer official and well-known sources over blogs.
-- YouTube videos only if they have captions; no paywalled or login-only pages, no PDFs.
-- Up to 6, each a different URL than those listed as tried.
+You suggest resources an adult learner can use to learn one concept, in any subject (history, a language, music, management, science, software…): web pages to read and YouTube videos to watch. kizn fetches every one and only offers those it can hold as text about the concept (a page's readable text, a video's captions), so only suggest resources you're confident exist at that exact URL.
+- Prefer stable, well-known references for the subject, at the address you know best: an encyclopedia's article on it (Wikipedia, Britannica, the Stanford Encyclopedia of Philosophy…), open course material (Khan Academy, OpenStax, a university course page), the subject's own official sources where it has them (a standards body, a government agency, a museum or archive, a publisher, software documentation), and established educational explainers. A reference's main page on the concept beats a deep link you're unsure of; reputable sources beat blogs.
+- Include a YouTube video when a demonstration, a performance or a lecture would suit the concept, from an established educational channel, and only if it has captions.
+- No paywalled or login-only pages, no PDFs.
+- Up to 6, each a different URL than those listed as tried (those failed: don't guess near them).
 - \"why\": one line on what the learner gets from it.
 Reply with JSON only: {\"sources\": [{\"url\": \"https://...\", \"title\": \"...\", \"why\": \"...\"}]}";
 
@@ -383,14 +384,31 @@ impl Ctx {
         }
     }
 
+    /// Looks for resources: a second round, told what failed, when the first
+    /// finds nothing kizn can use.
     async fn find_sources(&self, concept_id: &str) -> Result<(), AppError> {
+        for _ in 0..2 {
+            if self.suggest_round(concept_id).await? > 0 {
+                break;
+            }
+            let verified = self.store.sources(concept_id)?.iter().filter(|s| s.status == "verified").count();
+            if verified >= MAX_VERIFIED {
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    /// One round: the tutor suggests, kizn checks. Returns how many passed.
+    async fn suggest_round(&self, concept_id: &str) -> Result<usize, AppError> {
         let concept = self.store.concept(concept_id)?.ok_or_else(|| AppError::Refused("no such concept".into()))?;
         let outcome = self.store.outcome(&concept.outcome_id)?.ok_or_else(|| AppError::Refused("no outcome".into()))?;
         let topic = self.store.topic(&outcome.topic_id)?.ok_or_else(|| AppError::Refused("no topic".into()))?;
         let tried = self.store.sources(concept_id)?;
         let mut verified = tried.iter().filter(|s| s.status == "verified").count();
+        let before = verified;
         if verified >= MAX_VERIFIED {
-            return Ok(());
+            return Ok(0);
         }
         let tutor = self.role_model(Role::Tutor).or_else(|_| self.role_model(Role::Author))?;
         let ask = format!(
@@ -420,7 +438,7 @@ impl Ctx {
                     automatic: false,
                     added_by: "kizn".into(),
                 })?;
-                return Ok(());
+                return Ok(0);
             }
         };
         let candidates = reply["sources"].as_array().cloned().unwrap_or_default();
@@ -453,6 +471,6 @@ impl Ctx {
                 verified += 1;
             }
         }
-        Ok(())
+        Ok(verified - before)
     }
 }
