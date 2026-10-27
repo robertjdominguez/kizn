@@ -17,6 +17,7 @@ const verdictYes = {
 };
 
 import { call } from "../rpc";
+import { Onboarding } from "./Onboarding";
 import { Summary } from "./Summary";
 
 const LETTERS = ["A", "B", "C", "D", "E"];
@@ -28,14 +29,21 @@ export function Practice({ topicId }: { topicId?: string }) {
   const [deck, setDeck] = useState<DeckView | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [at, setAt] = useState(0);
+  // A topic's first set opens on two cards saying how it works.
+  const [intro, setIntro] = useState<0 | 1 | null>(null);
   const [answers, setAnswers] = useState<AnswerView[]>([]);
   const back = topicId ? `#/topic/${encodeURIComponent(topicId)}` : "#/";
 
   useEffect(() => {
     call({ type: "start_practice", topic_id: topicId })
-      .then(setDeck)
+      .then((d) => {
+        setDeck(d);
+        if (d.first_set) setIntro(0);
+      })
       .catch((e: Error) => setError(e.message));
   }, [topicId]);
+  const introNext = useCallback(() => setIntro((i) => (i === 0 ? 1 : null)), []);
+  const introSkip = useCallback(() => setIntro(null), []);
 
   const card = deck?.cards[at];
   const answered = answers.length > at ? answers[at] : undefined;
@@ -52,7 +60,7 @@ export function Practice({ topicId }: { topicId?: string }) {
           {card?.topic_title && <span className="truncate text-sm text-ink-3">{card.topic_title}</span>}
           <span className="flex-1" />
           <AnimatePresence mode="wait" initial={false}>
-            {deck && !done && (
+            {deck && !done && intro === null && (
               <motion.span
                 key={at}
                 variants={rise}
@@ -85,7 +93,16 @@ export function Practice({ topicId }: { topicId?: string }) {
             Nothing to practise right now.
           </motion.p>
         )}
-        {card && (
+        {deck && intro !== null && (
+          <Onboarding
+            key={`intro-${intro}`}
+            step={intro}
+            count={deck.cards.length}
+            onNext={introNext}
+            onSkip={introSkip}
+          />
+        )}
+        {card && intro === null && (
           <Card
             key={card.item_id}
             card={card}

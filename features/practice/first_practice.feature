@@ -13,6 +13,15 @@ Feature: First practice
     Then I get 5 recall cards, one per concept
     And the correct option's position varies between cards
 
+  @ui
+  Scenario: A topic's first set starts by saying how it works
+    Given a topic whose bank has recall questions for 5 unseen concepts
+    When I start practice
+    Then I first see how concepts move from not started to stuck
+    And that the starting point is about finding where I am
+    When I begin
+    Then I get the first card
+
   @domain @ui
   Scenario: Feedback on a tap
     Given I'm practising a topic
