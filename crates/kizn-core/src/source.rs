@@ -157,6 +157,93 @@ static BLOCK: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?is)<(h[1-6]|p|li|pre|blockquote)\b[^>]*>(.*?)</(?:h[1-6]|p|li|pre|blockquote)\s*>").unwrap()
 });
 
+/// A fetched page's text as blocks for the reader: Markdown when that's what
+/// came back (some documentation sites serve it to non-browsers), else HTML.
+pub fn page_blocks(content_type: &str, body: &str) -> Vec<Block> {
+    if is_markdown(content_type, body) { markdown_blocks(body) } else { blocks(body) }
+}
+
+/// Markdown, by its content type, or by plain text that reads like it (a
+/// "# " heading near the top and no HTML tags).
+pub fn is_markdown(content_type: &str, body: &str) -> bool {
+    let ct = content_type.to_lowercase();
+    if ct.contains("markdown") {
+        return true;
+    }
+    let head: String = body.chars().take(2000).collect();
+    !ct.contains("html") && !TAG.is_match(&head) && head.lines().any(|l| l.starts_with("# ") || l.starts_with("## "))
+}
+
+static MD_LINK: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"!?\[([^\]]*)\]\([^)]*\)").unwrap());
+static MD_EMPHASIS: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(\*\*|__|\*|_)([^*_]+?)(\*\*|__|\*|_)").unwrap());
+static MD_LIST: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\s*(?:[-*+]|\d+[.)])\s+").unwrap());
+
+/// Inline Markdown as plain text: links keep their words, emphasis and code
+/// marks go.
+fn md_inline(text: &str) -> String {
+    let t = MD_LINK.replace_all(text, "$1");
+    let t = MD_EMPHASIS.replace_all(&t, "$2");
+    t.replace('`', "").split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Markdown as blocks: headings, list items, fenced code and paragraphs.
+/// Front matter, HTML comments and tables' rule lines are dropped.
+pub fn markdown_blocks(md: &str) -> Vec<Block> {
+    let mut out: Vec<Block> = vec![];
+    let mut para: Vec<&str> = vec![];
+    let mut code: Option<Vec<&str>> = None;
+    let flush = |para: &mut Vec<&str>, out: &mut Vec<Block>| {
+        if !para.is_empty() {
+            let text = md_inline(&para.join(" "));
+            if !text.is_empty() {
+                out.push(Block { kind: "p".into(), text });
+            }
+            para.clear();
+        }
+    };
+    let body = md.strip_prefix("---\n").and_then(|r| r.split_once("\n---\n").map(|(_, rest)| rest)).unwrap_or(md);
+    for line in body.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+            match code.take() {
+                Some(lines) => out.push(Block { kind: "pre".into(), text: lines.join("\n") }),
+                None => {
+                    flush(&mut para, &mut out);
+                    code = Some(vec![]);
+                }
+            }
+            continue;
+        }
+        if let Some(lines) = code.as_mut() {
+            lines.push(line);
+            continue;
+        }
+        if trimmed.is_empty() || trimmed.starts_with("<!--") || trimmed.chars().all(|c| "|-: ".contains(c)) {
+            flush(&mut para, &mut out);
+            continue;
+        }
+        if trimmed.starts_with('#') {
+            flush(&mut para, &mut out);
+            let text = md_inline(trimmed.trim_start_matches('#'));
+            if !text.is_empty() {
+                out.push(Block { kind: "h".into(), text });
+            }
+        } else if MD_LIST.is_match(line) {
+            flush(&mut para, &mut out);
+            out.push(Block { kind: "li".into(), text: md_inline(&MD_LIST.replace(line, "")) });
+        } else if let Some(quote) = trimmed.strip_prefix('>') {
+            para.push(quote.trim());
+        } else {
+            para.push(trimmed);
+        }
+    }
+    if let Some(lines) = code {
+        out.push(Block { kind: "pre".into(), text: lines.join("\n") });
+    }
+    flush(&mut para, &mut out);
+    out
+}
+
 /// A page's text as blocks, in order, for the reader (never its HTML).
 pub fn blocks(html: &str) -> Vec<Block> {
     let body = DROP.replace_all(html, " ");
@@ -385,6 +472,19 @@ mod tests {
         assert_eq!(kinds, ["h", "p", "li", "li", "pre"]);
         assert_eq!(b[1].text, "A tag is a movable name.");
         assert_eq!(b[4].text, "docker pull api:2.4");
+    }
+
+    #[test]
+    fn markdown_pages_become_blocks() {
+        let md = "---\ntitle: x\n---\n# Building best practices\n\n## Use multi-stage builds\n\nMulti-stage builds let you\nreduce the size of **your** image. See [the docs](https://x).\n\n- One `thing`\n- Two\n\n```dockerfile\nFROM alpine\nRUN echo hi\n```\n";
+        assert!(is_markdown("text/plain", md) && is_markdown("text/markdown; charset=utf-8", "x"));
+        assert!(!is_markdown("text/html", "<p># not markdown</p>"));
+        let b = page_blocks("text/plain", md);
+        let kinds: Vec<&str> = b.iter().map(|b| b.kind.as_str()).collect();
+        assert_eq!(kinds, ["h", "h", "p", "li", "li", "pre"]);
+        assert_eq!(b[2].text, "Multi-stage builds let you reduce the size of your image. See the docs.");
+        assert_eq!(b[3].text, "One thing");
+        assert_eq!(b[5].text, "FROM alpine\nRUN echo hi");
     }
 
     #[test]

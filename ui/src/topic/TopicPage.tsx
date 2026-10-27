@@ -129,8 +129,13 @@ function NextUp({ topic: t, onOpen }: { topic: TopicView; onOpen: (conceptId: st
           : `${plural(fresh, "new concept")}. About ${minutes} min.`;
     action = { label: "Practise now", href: practise, icon: Play };
   } else {
-    const when = whenDue(t.next_due_in_days);
-    title = when ? `Nothing due until ${when}` : "Nothing due";
+    const days = t.next_due_in_days === null ? null : Number(t.next_due_in_days);
+    title =
+      days === null || days <= 0
+        ? "Nothing due"
+        : days === 1
+          ? "Nothing due until tomorrow"
+          : `Nothing due for ${days} days`;
     if (unread.length > 0) {
       line = `Meanwhile, read up on the ${plural(unread.length, "concept")} you missed.`;
       const first = unread[0];

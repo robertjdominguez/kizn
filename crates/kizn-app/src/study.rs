@@ -6,7 +6,7 @@
 use std::time::Duration;
 
 use kizn_core::progress::ConceptState;
-use kizn_core::source::{Rejected, blocks, caption_track, check_text, transcript, verify, video_title, youtube_id};
+use kizn_core::source::{Rejected, caption_track, check_text, page_blocks, transcript, verify, video_title, youtube_id};
 use kizn_store::SourceRow;
 use serde_json::{Value, json};
 
@@ -123,7 +123,14 @@ impl Ctx {
             self.store.concept(&s.concept_id)?.ok_or_else(|| AppError::Refused("its concept is gone".into()))?;
         let outcome =
             self.store.outcome(&concept.outcome_id)?.ok_or_else(|| AppError::Refused("its outcome is gone".into()))?;
-        if s.content_json.is_none() {
+        // Text kept by an older kizn that couldn't parse it (a whole page as
+        // one block, as Markdown pages came out) is read again.
+        let unparsed = s.kind == "page"
+            && s.content_json.as_deref().is_some_and(|c| {
+                serde_json::from_str::<Vec<kizn_core::source::Block>>(c)
+                    .is_ok_and(|b| b.len() <= 1 && b.iter().map(|b| b.text.split_whitespace().count()).sum::<usize>() > 300)
+            });
+        if s.content_json.is_none() || unparsed {
             let checked = self.check_resource(&s.url, &concept.statement).await;
             match checked.content {
                 Some(content) => {
@@ -234,7 +241,7 @@ impl Ctx {
                     words: Some(v.words as i64),
                     title: v.title,
                     kind: "page",
-                    content: serde_json::to_string(&blocks(&page.body)).ok(),
+                    content: serde_json::to_string(&page_blocks(&page.content_type, &page.body)).ok(),
                     automatic: false,
                 },
             },
