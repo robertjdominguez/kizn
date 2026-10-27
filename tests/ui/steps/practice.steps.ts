@@ -525,8 +525,8 @@ Then("opening it shows its transcript with timestamps", async ({ page }) => {
   await sheet(page)
     .getByRole("button", { name: /youtube\.com/ })
     .click();
-  await expect(reader(page).getByRole("button", { name: "0:00" })).toBeVisible();
-  await expect(reader(page).getByRole("button", { name: "0:05" })).toBeVisible();
+  await expect(reader(page).getByRole("button", { name: "0:00", exact: true })).toBeVisible();
+  await expect(reader(page).getByRole("button", { name: "0:05", exact: true })).toBeVisible();
   await expect(reader(page).getByRole("button", { name: "Watch on YouTube" })).toBeVisible();
 });
 
@@ -607,4 +607,31 @@ Then("the page shows {int} conversation", async ({ page }, n: number) => {
   await expect(
     reader(page).getByRole("button", { name: new RegExp(`Ask about this · ${n} conversation`) }),
   ).toBeVisible();
+});
+
+// ---- when I'm stuck ------------------------------------------------------------------
+
+When("I close the tutor", async ({ page }) => {
+  await page.keyboard.press("Escape");
+  await expect(tutor(page)).toHaveCount(0);
+});
+
+When("I finish the rest of the set", async ({ page, world }) => {
+  await page.getByRole("button", { name: /^(Next|Finish)/ }).click();
+  await answerAll(page, world as PracticeWorld, () => true);
+});
+
+When("I open what I missed", async ({ page }) => {
+  await group(page, "Learn these first").first().getByRole("button").click();
+  await expect(sheet(page).getByText("docs.example.org")).toBeVisible({ timeout: 15_000 });
+});
+
+When("I close the tutor and the reader, and mark it studied", async ({ page }) => {
+  await page.keyboard.press("Escape");
+  await expect(tutor(page)).toHaveCount(0);
+  await reader(page).getByRole("button", { name: "Back" }).click();
+  await expect(reader(page)).toHaveCount(0);
+  await sheet(page).getByRole("button", { name: "Mark studied" }).click();
+  await expect(sheet(page).getByText("Studied")).toBeVisible();
+  await page.keyboard.press("Escape");
 });
