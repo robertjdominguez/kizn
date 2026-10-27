@@ -53,6 +53,7 @@ struct Kizn {
     added: Option<Result<kizn_app::ConceptPageView, String>>,
     /// Writing batches started while the last tutor reply streamed.
     batches_during_reply: Option<i64>,
+    reading: Option<kizn_app::ReadingListView>,
 }
 
 impl std::fmt::Debug for Kizn {
@@ -89,6 +90,7 @@ impl Kizn {
             resource: None,
             added: None,
             batches_during_reply: None,
+            reading: None,
         }
     }
 
@@ -1588,6 +1590,65 @@ async fn missed_while_writing(w: &mut Kizn) {
 #[then("no new writing starts until the reply is done")]
 fn no_new_writing(w: &mut Kizn) {
     assert_eq!(w.batches_during_reply, Some(0), "the writer started batches while the tutor answered");
+}
+
+// --- Reading list -----------------------------------------------------------------
+
+impl Kizn {
+    async fn reading_list(&mut self) -> kizn_app::ReadingListView {
+        match self.command(Command::GetReadingList { topic_id: None }).await {
+            Ok(Reply::ReadingList(l)) => l,
+            other => panic!("expected a ReadingList, got {other:?}"),
+        }
+    }
+}
+
+#[given(expr = "I missed {int} concepts in my starting point")]
+async fn missed_n(w: &mut Kizn, n: usize) {
+    practising(w).await;
+    let total = w.deck.as_ref().unwrap().cards.len();
+    for i in 0..total {
+        w.answer_card(i, i >= n).await;
+    }
+}
+
+#[when("I open my reading list")]
+async fn open_reading_list(w: &mut Kizn) {
+    // Opening it starts kizn looking; wait until it's found something for each.
+    for _ in 0..500 {
+        let l = w.reading_list().await;
+        if l.concepts.iter().all(|c| !c.finding && c.pages + c.videos > 0) {
+            w.reading = Some(l);
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    panic!("the reading list never filled: {:#?}", w.reading_list().await);
+}
+
+#[then("I see both concepts, with what there is to learn from for each")]
+fn reading_both(w: &mut Kizn) {
+    let l = w.reading.as_ref().unwrap();
+    assert_eq!(l.concepts.len(), 2);
+    assert!(l.concepts.iter().all(|c| c.pages == 2 && c.videos == 1), "{l:#?}");
+}
+
+#[then("none of them studied yet")]
+fn none_studied(w: &mut Kizn) {
+    assert_eq!(w.reading.as_ref().unwrap().studied, 0);
+}
+
+#[when("I mark one of them studied")]
+async fn mark_one(w: &mut Kizn) {
+    let concept_id = w.reading.as_ref().unwrap().concepts[0].concept_id.clone();
+    w.concept_from(Command::MarkStudied { concept_id }).await;
+}
+
+#[then(expr = "the reading list shows {int} of {int} studied")]
+async fn reading_progress(w: &mut Kizn, studied: i64, total: usize) {
+    let l = w.reading_list().await;
+    assert_eq!((l.studied, l.concepts.len()), (studied, total));
+    assert!(l.concepts[0].studied && !l.concepts[1].studied);
 }
 
 #[tokio::main]

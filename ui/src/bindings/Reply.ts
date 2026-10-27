@@ -6,6 +6,7 @@ import type { DeckView } from "./DeckView";
 import type { DisputeView } from "./DisputeView";
 import type { NoteView } from "./NoteView";
 import type { ProgressView } from "./ProgressView";
+import type { ReadingListView } from "./ReadingListView";
 import type { ResourceView } from "./ResourceView";
 import type { SettingsView } from "./SettingsView";
 import type { SummaryView } from "./SummaryView";
@@ -14,4 +15,4 @@ import type { ThreadView } from "./ThreadView";
 import type { TodayView } from "./TodayView";
 import type { TopicView } from "./TopicView";
 
-export type Reply = { "type": "today", "data": TodayView } | { "type": "app_info", "data": AppInfo } | { "type": "settings", "data": SettingsView } | { "type": "models", "data": Array<string> } | { "type": "topic", "data": TopicView } | { "type": "deck", "data": DeckView } | { "type": "answered", "data": AnswerView } | { "type": "summary", "data": SummaryView } | { "type": "progress", "data": ProgressView } | { "type": "concept", "data": ConceptPageView } | { "type": "disputed", "data": DisputeView } | { "type": "thread", "data": ThreadView } | { "type": "resource", "data": ResourceView } | { "type": "note", "data": NoteView } | { "type": "threads", "data": Array<ThreadSummary> };
+export type Reply = { "type": "today", "data": TodayView } | { "type": "app_info", "data": AppInfo } | { "type": "settings", "data": SettingsView } | { "type": "models", "data": Array<string> } | { "type": "topic", "data": TopicView } | { "type": "deck", "data": DeckView } | { "type": "answered", "data": AnswerView } | { "type": "summary", "data": SummaryView } | { "type": "progress", "data": ProgressView } | { "type": "concept", "data": ConceptPageView } | { "type": "disputed", "data": DisputeView } | { "type": "thread", "data": ThreadView } | { "type": "resource", "data": ResourceView } | { "type": "reading_list", "data": ReadingListView } | { "type": "note", "data": NoteView } | { "type": "threads", "data": Array<ThreadSummary> };

@@ -104,6 +104,13 @@ pub enum Command {
     MarkStudied {
         concept_id: String,
     },
+    /// Every concept that needs work (missed, not yet recalled), with what
+    /// there is to learn from: one topic's, or across topics. Starts looking
+    /// for resources for any that have none.
+    GetReadingList {
+        #[ts(optional)]
+        topic_id: Option<String>,
+    },
     /// A resource to read in kizn: a page's text or a video's transcript.
     GetResource {
         source_id: String,
@@ -181,6 +188,7 @@ pub enum Reply {
     Disputed(DisputeView),
     Thread(ThreadView),
     Resource(ResourceView),
+    ReadingList(ReadingListView),
     Note(NoteView),
     Threads(Vec<ThreadSummary>),
 }
@@ -237,6 +245,35 @@ pub struct SourceView {
     pub automatic: bool,
     /// The learner added it.
     pub own: bool,
+}
+
+/// The concepts that need work, and how far the studying has got.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct ReadingListView {
+    pub concepts: Vec<ReadingItem>,
+    #[ts(type = "number")]
+    pub studied: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct ReadingItem {
+    pub concept_id: String,
+    pub statement: String,
+    pub topic_id: String,
+    pub topic_title: String,
+    #[ts(type = "number")]
+    pub outcome_ord: i64,
+    pub studied: bool,
+    /// Resources kizn holds for it, by kind.
+    #[ts(type = "number")]
+    pub pages: i64,
+    #[ts(type = "number")]
+    pub videos: i64,
+    /// kizn is looking for resources now.
+    pub finding: bool,
+    pub has_note: bool,
 }
 
 /// A resource in kizn's reader: the concept it's for, and its text.

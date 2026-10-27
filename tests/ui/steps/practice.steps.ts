@@ -264,7 +264,8 @@ When("I open Today after the set", async ({ page }) => {
 });
 
 Then("Today's next step is to read up on {int} concept", async ({ page }, n: number) => {
-  await expect(page.getByRole("heading", { name: `Read up on the ${n} concept you missed` })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Read up on what you missed" })).toBeVisible();
+  await expect(page.getByText(`${n} concept still to read`)).toBeVisible();
   await expect(page.getByRole("button", { name: /Start reading/ })).toBeVisible();
 });
 
@@ -634,4 +635,44 @@ When("I close the tutor and the reader, and mark it studied", async ({ page }) =
   await sheet(page).getByRole("button", { name: "Mark studied" }).click();
   await expect(sheet(page).getByText("Studied")).toBeVisible();
   await page.keyboard.press("Escape");
+});
+
+// ---- reading list ----------------------------------------------------------------------
+
+const readingList = (page: Page) => page.getByRole("dialog", { name: "Your reading" });
+
+Given("I missed {int} concepts in my starting point", async ({ page, world }, n: number) => {
+  await seedTopic(page);
+  await openPractice(page, world, `/#/practice/${TOPIC}`);
+  await skipIntro(page);
+  await answerAll(page, world as PracticeWorld, (i) => i >= n);
+});
+
+When("I open my reading list", async ({ page }) => {
+  await page.goto("/#/");
+  await page.getByRole("button", { name: /Start reading/ }).click();
+  await expect(readingList(page)).toBeVisible();
+  // kizn finds and checks resources as the list opens.
+  await expect(readingList(page).getByText("finding…")).toHaveCount(0, { timeout: 20_000 });
+});
+
+Then("I see both concepts, with what there is to learn from for each", async ({ page }) => {
+  await expect(readingList(page).getByRole("img", { name: "2 pages, 1 video" })).toHaveCount(2);
+});
+
+Then("none of them studied yet", async ({ page }) => {
+  await expect(readingList(page)).toContainText("0 of 2 studied");
+});
+
+When("I mark one of them studied", async ({ page }) => {
+  await readingList(page).locator("section button").first().click();
+  await sheet(page).last().getByRole("button", { name: "Mark studied" }).click();
+  await expect(sheet(page).last().getByText("Studied")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(sheet(page).last()).toHaveCount(0);
+});
+
+Then("the reading list shows {int} of {int} studied", async ({ page }, a: number, b: number) => {
+  await expect(readingList(page)).toContainText(`${a} of ${b} studied`);
+  await expect(readingList(page).getByLabel("Studied", { exact: true })).toHaveCount(a);
 });

@@ -6,11 +6,15 @@
 use std::time::Duration;
 
 use kizn_core::progress::ConceptState;
-use kizn_core::source::{Rejected, caption_track, check_text, page_blocks, transcript, verify, video_title, youtube_id};
+use kizn_core::source::{
+    Rejected, caption_track, check_text, page_blocks, transcript, verify, video_title, youtube_id,
+};
 use kizn_store::SourceRow;
 use serde_json::{Value, json};
 
-use crate::command::{BlockView, ConceptPageView, CueView, NoteView, ResourceView, Role, SourceView};
+use crate::command::{
+    BlockView, ConceptPageView, CueView, NoteView, ReadingItem, ReadingListView, ResourceView, Role, SourceView,
+};
 use crate::practice::days_until;
 use crate::{AppError, Ctx};
 
@@ -111,6 +115,46 @@ fn source_view(s: &SourceRow) -> SourceView {
 }
 
 impl Ctx {
+    /// The concepts that need work (seen: missed and not yet recalled), in
+    /// topic and outcome order, with what there is to learn from.
+    pub(crate) fn reading_list(&self, topic_id: Option<&str>) -> Result<ReadingListView, AppError> {
+        let topics: Vec<kizn_store::TopicRow> = match topic_id {
+            Some(id) => vec![self.store.topic(id)?.ok_or_else(|| AppError::Refused("there's no such topic".into()))?],
+            None => self.store.all_topics()?.into_iter().filter(|t| t.status == "confirmed").collect(),
+        };
+        let mut concepts = vec![];
+        for t in topics {
+            let standings = self.standings(&t.id)?;
+            for o in self.store.outcomes(&t.id)? {
+                for c in self.store.concepts(&o.id)? {
+                    if standings.get(&c.id).map(|s| s.state) != Some(ConceptState::Seen) {
+                        continue;
+                    }
+                    let sources = self.store.sources(&c.id)?;
+                    if sources.is_empty() {
+                        self.start_finding(&c.id);
+                    }
+                    let verified =
+                        |kind: &str| sources.iter().filter(|s| s.status == "verified" && s.kind == kind).count() as i64;
+                    concepts.push(ReadingItem {
+                        studied: self.store.studied_at(&c.id)?.is_some(),
+                        pages: verified("page"),
+                        videos: verified("video"),
+                        finding: self.sourcing.lock().unwrap().contains(&c.id),
+                        has_note: self.store.note(&c.id)?.is_some(),
+                        concept_id: c.id,
+                        statement: c.statement,
+                        topic_id: t.id.clone(),
+                        topic_title: t.title.clone(),
+                        outcome_ord: o.ord,
+                    });
+                }
+            }
+        }
+        let studied = concepts.iter().filter(|c| c.studied).count() as i64;
+        Ok(ReadingListView { concepts, studied })
+    }
+
     /// A resource for the reader. One checked before kizn kept its text is
     /// fetched again now, and kept.
     pub(crate) async fn resource(&self, source_id: &str) -> Result<ResourceView, AppError> {
@@ -127,8 +171,9 @@ impl Ctx {
         // one block, as Markdown pages came out) is read again.
         let unparsed = s.kind == "page"
             && s.content_json.as_deref().is_some_and(|c| {
-                serde_json::from_str::<Vec<kizn_core::source::Block>>(c)
-                    .is_ok_and(|b| b.len() <= 1 && b.iter().map(|b| b.text.split_whitespace().count()).sum::<usize>() > 300)
+                serde_json::from_str::<Vec<kizn_core::source::Block>>(c).is_ok_and(|b| {
+                    b.len() <= 1 && b.iter().map(|b| b.text.split_whitespace().count()).sum::<usize>() > 300
+                })
             });
         if s.content_json.is_none() || unparsed {
             let checked = self.check_resource(&s.url, &concept.statement).await;

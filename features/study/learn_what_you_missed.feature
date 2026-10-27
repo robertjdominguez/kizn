@@ -39,3 +39,12 @@ Feature: Learn what you missed
     When I open Today after the set
     Then Today's next step is to read up on 1 concept
     And this week shows today as practised
+
+  @domain @ui
+  Scenario: A reading list of everything to study
+    Given I missed 2 concepts in my starting point
+    When I open my reading list
+    Then I see both concepts, with what there is to learn from for each
+    And none of them studied yet
+    When I mark one of them studied
+    Then the reading list shows 1 of 2 studied
