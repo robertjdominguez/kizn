@@ -1240,14 +1240,23 @@ impl Kizn {
             .map(|o| store.batch_count(o).unwrap_or(0))
             .sum()
         };
-        let before = batches(self);
+        // Writing batches started between the 1st and the 15th word of the
+        // reply: certainly while the tutor is answering.
+        let mut first: Option<i64> = None;
         let mut deltas = 0;
         loop {
             match tokio::time::timeout(std::time::Duration::from_secs(10), rx.recv()).await {
-                Ok(Ok(Event::TutorDelta { thread_id, .. })) if thread_id == started.id => deltas += 1,
+                Ok(Ok(Event::TutorDelta { thread_id, .. })) if thread_id == started.id => {
+                    deltas += 1;
+                    if deltas == 1 {
+                        first = Some(batches(self));
+                    }
+                    if deltas == 15 {
+                        self.batches_during_reply = first.map(|f| batches(self) - f);
+                    }
+                }
                 Ok(Ok(Event::TutorDone { thread_id, error })) if thread_id == started.id => {
                     assert!(error.is_none(), "the tutor failed: {error:?}");
-                    self.batches_during_reply = Some(batches(self) - before);
                     break;
                 }
                 Ok(Ok(_)) | Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => {}
