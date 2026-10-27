@@ -252,10 +252,20 @@ impl Ctx {
             .map(|i| (i.stem, i.concept_ids))
             .collect();
         let slot_concept = slot.concept_id.as_ref().and_then(|id| concepts.iter().find(|c| &c.id == id));
-        let tier_ask = match slot.kind {
-            ItemKind::Recall => "remember or understand".to_string(),
-            ItemKind::Apply => Tier::apply_tier_for(target).name().to_string(),
-            ItemKind::Target | ItemKind::Explain => target.name().to_string(),
+        // The tiers an item of this kind may have, each a single Bloom tier:
+        // asked for as "remember or understand", models wrote that phrase as
+        // the tier, and every such item was refused.
+        let tiers: Vec<&str> = match slot.kind {
+            ItemKind::Recall => vec![Tier::Remember.name(), Tier::Understand.name()],
+            ItemKind::Apply => vec![Tier::apply_tier_for(target).name()],
+            ItemKind::Target | ItemKind::Explain => vec![target.name()],
+        };
+        let tier_rule = match tiers.as_slice() {
+            [one] => format!("Set \"tier\" to \"{one}\"."),
+            many => format!(
+                "Set \"tier\" to one of {}, a single word.",
+                many.iter().map(|t| format!("\"{t}\"")).collect::<Vec<_>>().join(" or ")
+            ),
         };
         // The rules that refuse most items, said concretely for this
         // request: models follow a named constraint better than a general one.
@@ -263,13 +273,13 @@ impl Ctx {
             (ItemKind::Recall, Some(c)) => format!(
                 "Each item tests exactly one concept: \"{}\". Set \"concepts\" to [\"{}\"] and nothing else. \
                  (kizn counts each answer as evidence about that one concept, so an item that brings in another \
-                 concept is refused.) The tier is remember or understand.",
+                 concept is refused.) {tier_rule}",
                 c.statement, c.statement
             ),
             (ItemKind::Explain, _) => "Write explain items: a prompt and an exemplar, no options.".to_string(),
             (kind, _) => format!(
                 "Each item is a scenario that needs at least two of the concepts listed, named in \"concepts\" \
-                 exactly as written there. The tier is {tier_ask}.{}",
+                 exactly as written there. {tier_rule}{}",
                 if kind == ItemKind::Target { " It's the outcome's target level." } else { "" }
             ),
         };
@@ -292,7 +302,7 @@ impl Ctx {
             topic.title,
             json!({
                 "topic": topic.title, "goal": topic.goal, "outcome": o.statement, "target_tier": target.name(),
-                "kind": slot.kind.name(), "tier": tier_ask, "count": count,
+                "kind": slot.kind.name(), "tiers": tiers, "count": count,
                 "concepts": concepts.iter().map(|c| c.statement.as_str()).collect::<Vec<_>>(),
                 "slot_concept": slot_concept.map(|c| c.statement.as_str()),
                 "existing_stems": existing.iter().map(|(s, _)| s.as_str()).collect::<Vec<_>>(),
