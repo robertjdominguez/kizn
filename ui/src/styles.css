@@ -23,6 +23,25 @@
     font-family: var(--font-mono);
   }
 
+  /* The hero's light, drifting slowly (still for reduced motion). */
+  .drift {
+    background-size: 180% 180%;
+    animation: drift 16s ease-in-out infinite alternate;
+  }
+  @keyframes drift {
+    from {
+      background-position: 0% 0%;
+    }
+    to {
+      background-position: 100% 100%;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .drift {
+      animation: none;
+    }
+  }
+
   ::selection {
     background-color: color-mix(in oklab, var(--color-accent) 30%, transparent);
   }
