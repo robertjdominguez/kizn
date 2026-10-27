@@ -331,3 +331,307 @@ Then("the topic shows {int} concepts stuck", async ({ page }, n: number) => {
     new RegExp(`${n}\\s*stuck`),
   );
 });
+
+// ---- this key is wrong -----------------------------------------------------------
+
+/** One row from the scenario's database. */
+function row<T>(world: World, sql: string, ...args: string[]): T {
+  if (!world.dataDir) throw new Error("no data directory");
+  const db = new DatabaseSync(join(world.dataDir, "kizn.db"), { readOnly: true });
+  try {
+    return db.prepare(sql).get(...args) as T;
+  } finally {
+    db.close();
+  }
+}
+
+Given("I missed a card", async ({ page, world }) => {
+  await seedTopic(page);
+  await openPractice(page, world, `/#/practice/${TOPIC}`);
+  await skipIntro(page);
+  await answer(page, world as PracticeWorld, false, false);
+});
+
+When("I say {string}", async ({ page }, what: string) => {
+  await page.getByRole("button", { name: what }).click();
+});
+
+When("I say {string} and confirm", async ({ page }, what: string) => {
+  await page.getByRole("button", { name: what }).click();
+  await page.getByRole("group", { name: "Look again" }).getByRole("button", { name: "Yes, set it aside" }).click();
+});
+
+Then("that answer moves nothing", async ({ page }) => {
+  await expect(page.getByText(/^Set aside\./)).toBeVisible();
+  await expect(page.getByText(/: not started$/)).toBeVisible();
+});
+
+Then("the question never appears again", async ({ world }) => {
+  const card = (world as PracticeWorld).deck?.cards[0];
+  if (!card) throw new Error("no card");
+  await expect
+    .poll(() => row<{ status: string }>(world, "SELECT status FROM items WHERE id = ?", card.item_id).status)
+    .toBe("disputed");
+});
+
+Then("a replacement is written for its slot", async ({ world }) => {
+  const card = (world as PracticeWorld).deck?.cards[0];
+  if (!card) throw new Error("no card");
+  const item = row<{ outcome_id: string; concept_ids_json: string }>(
+    world,
+    "SELECT outcome_id, concept_ids_json FROM items WHERE id = ?",
+    card.item_id,
+  );
+  const concept = (JSON.parse(item.concept_ids_json) as string[])[0] ?? "";
+  // The fixture held two; the disputed one leaves one until the writer refills.
+  await expect
+    .poll(
+      () =>
+        row<{ n: number }>(
+          world,
+          "SELECT count(*) AS n FROM items WHERE outcome_id = ? AND kind = 'recall' AND status = 'active' AND json_extract(concept_ids_json, '$[0]') = ?",
+          item.outcome_id,
+          concept,
+        ).n,
+      { timeout: 60_000 },
+    )
+    .toBeGreaterThanOrEqual(2);
+});
+
+Then("I see kizn's reason for its key first", async ({ page, world }) => {
+  const card = (world as PracticeWorld).deck?.cards[0];
+  if (!card) throw new Error("no card");
+  const key = optionsOf(world, card.item_id).find((o) => o.correct);
+  const look = page.getByRole("group", { name: "Look again" });
+  await expect(look).toContainText("kizn's key is");
+  await expect(look).toContainText(key?.why ?? "");
+  await expect(look).toContainText("Still think the key is wrong?");
+});
+
+When("I keep the question", async ({ page }) => {
+  await page.getByRole("button", { name: "Keep it" }).click();
+});
+
+Then("my answer still counts", async ({ page, world }) => {
+  await expect(page.getByRole("group", { name: "Look again" })).toHaveCount(0);
+  await expect(page.getByText("Not this time.")).toBeVisible();
+  const card = (world as PracticeWorld).deck?.cards[0];
+  const a = row<{ disputed_at: string | null }>(
+    world,
+    "SELECT disputed_at FROM attempts WHERE item_id = ?",
+    card?.item_id ?? "",
+  );
+  expect(a.disputed_at).toBeNull();
+});
+
+// ---- ask about this ----------------------------------------------------------------
+
+const tutor = (page: Page) => page.getByRole("dialog", { name: "Ask about this" });
+
+async function askInSheet(page: Page, text: string, replyStarts = "You picked") {
+  const box = tutor(page).getByLabel("Your question");
+  await box.fill(text);
+  await box.press("Enter");
+  await expect(tutor(page).getByLabel("The tutor's reply").last()).toContainText(replyStarts, { timeout: 15_000 });
+}
+
+When("I ask about it {string}", async ({ page }, text: string) => {
+  await page.getByRole("button", { name: /Ask about this/ }).click();
+  await expect(tutor(page)).toBeVisible();
+  await askInSheet(page, text);
+});
+
+When("I ask about it again in a new conversation {string}", async ({ page }, text: string) => {
+  await tutor(page).getByRole("button", { name: "New conversation" }).click();
+  await askInSheet(page, text);
+});
+
+Then("the tutor's reply streams in, about my pick and the key", async ({ page, world }) => {
+  const card = (world as PracticeWorld).deck?.cards[0];
+  if (!card) throw new Error("no card");
+  const key = optionsOf(world, card.item_id).find((o) => o.correct);
+  const reply = tutor(page).getByLabel("The tutor's reply").last();
+  await expect(reply).toContainText(key?.text ?? "");
+  await expect(reply).toContainText(key?.why ?? "");
+});
+
+Then("the conversation is kept with the card", async ({ page }) => {
+  await page.keyboard.press("Escape");
+  await expect(tutor(page)).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /Ask about this · 1 conversation$/ })).toBeVisible();
+});
+
+Then("the card shows {int} conversations", async ({ page }, n: number) => {
+  await page.keyboard.press("Escape");
+  await expect(tutor(page)).toHaveCount(0);
+  await expect(page.getByRole("button", { name: new RegExp(`Ask about this · ${n} conversations$`) })).toBeVisible();
+});
+
+Then("I can reopen either", async ({ page }) => {
+  await page.getByRole("button", { name: /Ask about this/ }).click();
+  const earlier = tutor(page).getByRole("region", { name: "Earlier conversations" });
+  await expect(earlier).toContainText("Earlier · 2 conversations");
+  for (const [i, title] of ["Why is the key right?", "Give me an example"].entries()) {
+    // Back to the list (it shows while no conversation is open).
+    if (i > 0) await tutor(page).getByRole("button", { name: "New conversation" }).click();
+    await earlier.getByRole("button", { name: title }).click();
+    await expect(tutor(page).getByLabel("The tutor's reply")).toContainText("You picked");
+  }
+});
+
+// ---- read in kizn --------------------------------------------------------------------
+
+const sheet = (page: Page) => page.getByRole("dialog").filter({ hasText: "Learn this" });
+const reader = (page: Page) => page.getByRole("dialog", { name: "Reader" });
+
+Given("a concept with a verified page", async ({ page, world }) => {
+  await seedTopic(page);
+  await openPractice(page, world, `/#/practice/${TOPIC}`);
+  await skipIntro(page);
+  await answer(page, world as PracticeWorld, false);
+  await openMissed(page, world as PracticeWorld);
+  await expect(sheet(page).getByText("docs.example.org")).toBeVisible({ timeout: 15_000 });
+});
+
+When("I open it in kizn", async ({ page }) => {
+  await sheet(page)
+    .getByRole("button", { name: /docs\.example\.org/ })
+    .click();
+  await expect(reader(page)).toBeVisible();
+});
+
+Then("I read its text with the concept on top", async ({ page }) => {
+  await expect(reader(page)).toContainText("Reading for");
+  await expect(reader(page)).toContainText("An image is immutable layers plus config");
+  await expect(reader(page).getByRole("heading", { level: 2 }).first()).toBeVisible();
+});
+
+Then("not the page's scripts or navigation", async ({ page }) => {
+  await expect(reader(page)).not.toContainText("analytics()");
+  await expect(reader(page)).not.toContainText("Docs Guides Reference");
+});
+
+When("kizn looks for resources for it", async ({ page, world }) => {
+  await openMissed(page, world as PracticeWorld);
+  await expect(sheet(page).getByText("docs.example.org")).toBeVisible({ timeout: 15_000 });
+});
+
+Then("a video with captions is offered", async ({ page }) => {
+  await expect(sheet(page).getByRole("button", { name: /youtube\.com/ })).toBeVisible();
+  await expect(sheet(page).getByLabel("Video")).toBeVisible();
+});
+
+Then("opening it shows its transcript with timestamps", async ({ page }) => {
+  await sheet(page)
+    .getByRole("button", { name: /youtube\.com/ })
+    .click();
+  await expect(reader(page).getByRole("button", { name: "0:00", exact: true })).toBeVisible();
+  await expect(reader(page).getByRole("button", { name: "0:05", exact: true })).toBeVisible();
+  await expect(reader(page).getByRole("button", { name: "Watch on YouTube" })).toBeVisible();
+});
+
+When("I write a note while reading it", async ({ page }) => {
+  await sheet(page)
+    .getByRole("button", { name: /docs\.example\.org/ })
+    .click();
+  await reader(page).getByLabel("Your note").fill("Layers are shared, so rebuilds are cheap.");
+  await expect(reader(page).getByText("Saved")).toBeVisible();
+});
+
+When("I come back to the concept later", async ({ page }) => {
+  await reader(page).getByRole("button", { name: "Back" }).click();
+  await page.keyboard.press("Escape");
+  await page.goto(`/#/topic/${TOPIC}`);
+  await page.reload();
+  await page.getByRole("region", { name: "Learn these" }).getByRole("button").first().click();
+});
+
+Then("the note is there", async ({ page }) => {
+  await expect(sheet(page).getByRole("region", { name: "Your note" })).toContainText(
+    "Layers are shared, so rebuilds are cheap.",
+  );
+});
+
+// ---- asking about concepts and passages ------------------------------------------
+
+When("I ask about the concept {string}", async ({ page }, text: string) => {
+  await sheet(page)
+    .getByRole("button", { name: /Ask about this concept/ })
+    .click();
+  await expect(tutor(page)).toBeVisible();
+  await askInSheet(page, text, "About");
+});
+
+Then("the tutor's reply draws on the concept's resources", async ({ page }) => {
+  const reply = tutor(page).getByLabel("The tutor's reply").last();
+  await expect(reply).toContainText("From ");
+  await expect(reply).toContainText("This page explains");
+});
+
+Then("the concept shows {int} conversation", async ({ page }, n: number) => {
+  await page.keyboard.press("Escape");
+  await expect(tutor(page)).toHaveCount(0);
+  await expect(
+    sheet(page).getByRole("button", { name: new RegExp(`Ask about this concept · ${n} conversation`) }),
+  ).toBeVisible();
+});
+
+When("I pick a passage in the page and ask {string}", async ({ page }, text: string) => {
+  await sheet(page)
+    .getByRole("button", { name: /docs\.example\.org/ })
+    .click();
+  const article = reader(page).locator("article");
+  const para = article.locator("p", { hasText: "This page explains" }).first();
+  await expect(para).toBeVisible();
+  // Select the first paragraph with the mouse, as a learner would.
+  const box = await para.boundingBox();
+  if (!box) throw new Error("no paragraph");
+  await page.mouse.move(box.x + 2, box.y + 4);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width - 4, box.y + box.height - 4, { steps: 8 });
+  await page.mouse.up();
+  await page.getByRole("button", { name: "Ask about the selection" }).click();
+  await expect(tutor(page).locator("blockquote")).toContainText("This page explains");
+  await askInSheet(page, text, "About");
+});
+
+Then("the tutor's reply is about that passage, from the page", async ({ page }) => {
+  const reply = tutor(page).getByLabel("The tutor's reply").last();
+  await expect(reply).toContainText('On "This page explains');
+  await expect(reply).toContainText("From it:");
+});
+
+Then("the page shows {int} conversation", async ({ page }, n: number) => {
+  await page.keyboard.press("Escape");
+  await expect(tutor(page)).toHaveCount(0);
+  await expect(
+    reader(page).getByRole("button", { name: new RegExp(`Ask about this · ${n} conversation`) }),
+  ).toBeVisible();
+});
+
+// ---- when I'm stuck ------------------------------------------------------------------
+
+When("I close the tutor", async ({ page }) => {
+  await page.keyboard.press("Escape");
+  await expect(tutor(page)).toHaveCount(0);
+});
+
+When("I finish the rest of the set", async ({ page, world }) => {
+  await page.getByRole("button", { name: /^(Next|Finish)/ }).click();
+  await answerAll(page, world as PracticeWorld, () => true);
+});
+
+When("I open what I missed", async ({ page }) => {
+  await group(page, "Learn these first").first().getByRole("button").click();
+  await expect(sheet(page).getByText("docs.example.org")).toBeVisible({ timeout: 15_000 });
+});
+
+When("I close the tutor and the reader, and mark it studied", async ({ page }) => {
+  await page.keyboard.press("Escape");
+  await expect(tutor(page)).toHaveCount(0);
+  await reader(page).getByRole("button", { name: "Back" }).click();
+  await expect(reader(page)).toHaveCount(0);
+  await sheet(page).getByRole("button", { name: "Mark studied" }).click();
+  await expect(sheet(page).getByText("Studied")).toBeVisible();
+  await page.keyboard.press("Escape");
+});

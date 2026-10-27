@@ -13,8 +13,8 @@ use kizn_core::{parse_sql_time, sql_time};
 use kizn_store::{AttemptRow, ConceptRow, ItemRow, OutcomeRow, TopicRow};
 
 use crate::command::{
-    AnswerView, CardView, ConceptChange, ConceptLine, ConceptProgress, DayView, DeckView, NextStep, OptionFeedback,
-    OutcomeProgress, OutcomeStanding, ProgressView, StateCounts, SummaryView,
+    AnswerView, CardView, ConceptChange, ConceptLine, ConceptProgress, DayView, DeckView, DisputeView, NextStep,
+    OptionFeedback, OutcomeProgress, OutcomeStanding, ProgressView, StateCounts, SummaryView,
 };
 use crate::{AppError, Ctx};
 
@@ -294,9 +294,43 @@ impl Ctx {
         })
     }
 
+    /// "This key is wrong": the answer is voided and its question retired.
+    pub(crate) fn dispute(&self, attempt_id: &str) -> Result<DisputeView, AppError> {
+        let attempt = self
+            .store
+            .attempts(None)?
+            .into_iter()
+            .find(|a| a.id == attempt_id)
+            .ok_or_else(|| AppError::Refused("there's no such answer".into()))?;
+        let before = self.ground(Some(&attempt.topic_id))?.standings();
+        self.store.dispute(attempt_id, &self.now())?;
+        let g = self.ground(Some(&attempt.topic_id))?;
+        let after = g.standings();
+        let name = |s: Option<&Standing>| s.map(|s| s.state).unwrap_or(ConceptState::Unseen).name().to_string();
+        let concepts = g
+            .item_concepts
+            .get(&attempt.item_id)
+            .cloned()
+            .or_else(|| self.store.item(&attempt.item_id).ok().flatten().map(|i| i.concept_ids))
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|c| {
+                g.concept(c).map(|(_, row)| ConceptChange {
+                    concept: row.statement.clone(),
+                    before: name(before.get(c)),
+                    after: name(after.get(c)),
+                })
+            })
+            .collect();
+        self.changed(&attempt.topic_id);
+        Ok(DisputeView { attempt_id: attempt_id.into(), concepts })
+    }
+
     pub(crate) fn summary(&self, attempt_ids: &[String]) -> Result<SummaryView, AppError> {
         let all = self.store.attempts(None)?;
-        let set: Vec<&AttemptRow> = all.iter().filter(|a| attempt_ids.contains(&a.id)).collect();
+        // Disputed answers don't count, here or anywhere.
+        let set: Vec<&AttemptRow> =
+            all.iter().filter(|a| attempt_ids.contains(&a.id) && a.disputed_at.is_none()).collect();
         let topics: Vec<String> = set.iter().map(|a| a.topic_id.clone()).collect::<HashSet<_>>().into_iter().collect();
         let mut held = vec![];
         let mut slipped = vec![];

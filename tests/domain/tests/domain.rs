@@ -44,6 +44,15 @@ struct Kizn {
     practice_took: std::time::Duration,
     clock: Arc<FakeClock>,
     concept: Option<kizn_app::ConceptPageView>,
+    thread: Option<kizn_app::ThreadView>,
+    threads: Vec<kizn_app::ThreadSummary>,
+    deltas: usize,
+    /// Progress and answers before something that mustn't move them.
+    progress_before: Option<String>,
+    resource: Option<kizn_app::ResourceView>,
+    added: Option<Result<kizn_app::ConceptPageView, String>>,
+    /// Writing batches started while the last tutor reply streamed.
+    batches_during_reply: Option<i64>,
 }
 
 impl std::fmt::Debug for Kizn {
@@ -73,6 +82,13 @@ impl Kizn {
             practice_took: std::time::Duration::ZERO,
             clock: Arc::new(FakeClock::at(Utc.with_ymd_and_hms(2026, 10, 25, 9, 0, 0).unwrap())),
             concept: None,
+            thread: None,
+            threads: vec![],
+            deltas: 0,
+            progress_before: None,
+            resource: None,
+            added: None,
+            batches_during_reply: None,
         }
     }
 
@@ -119,6 +135,20 @@ impl Kizn {
         self.practice_took += started.elapsed();
         self.answers.push(a.clone());
         a
+    }
+
+    /// Everything countable about the topic, as text: concept states, recall
+    /// dates, answers and whether any is disputed.
+    async fn progress_snapshot(&mut self) -> String {
+        let topic_id = self.topic_id();
+        let p = match self.command(Command::GetProgress { topic_id }).await {
+            Ok(Reply::Progress(p)) => p,
+            other => panic!("expected Progress, got {other:?}"),
+        };
+        let attempts = self.store().attempts(None).unwrap();
+        let states: Vec<(String, Option<String>, i64)> =
+            p.outcomes.iter().flat_map(|o| &o.concepts).map(|c| (c.state.clone(), c.due.clone(), c.answers)).collect();
+        format!("{states:?}{attempts:?}")
     }
 
     async fn read_summary(&mut self) -> SummaryView {
@@ -1011,8 +1041,9 @@ fn see_sources(w: &mut Kizn) {
     let c = w.concept.as_ref().unwrap();
     assert_eq!(c.finding, "found");
     let hosts: Vec<&str> = c.sources.iter().map(|s| s.host.as_str()).collect();
-    assert_eq!(hosts, ["docs.example.org", "blog.example.net"]);
+    assert_eq!(hosts, ["docs.example.org", "youtube.com", "blog.example.net"]);
     assert!(c.sources.iter().all(|s| s.words >= 150 && s.why.is_some()));
+    assert_eq!(c.sources.iter().map(|s| s.kind.as_str()).collect::<Vec<_>>(), ["page", "video", "page"]);
 }
 
 #[then("none it couldn't")]
@@ -1096,6 +1127,467 @@ fn week_practised(w: &mut Kizn) {
     assert_eq!(today.len(), 1);
     assert!(today[0].practised && today[0].date == t.date);
     assert!(t.week.iter().filter(|d| !d.today).all(|d| !d.practised));
+}
+
+// --- This key is wrong ---------------------------------------------------------
+
+#[given("I missed a card")]
+async fn missed_a_card(w: &mut Kizn) {
+    practising(w).await;
+    w.answer_card(0, false).await;
+}
+
+#[when(expr = "I say {string} and confirm")]
+async fn say_key_wrong(w: &mut Kizn, what: String) {
+    assert_eq!(what, "This key is wrong");
+    let attempt_id = w.answers.last().unwrap().attempt_id.clone();
+    match w.command(Command::Dispute { attempt_id }).await {
+        Ok(Reply::Disputed(d)) => {
+            assert_eq!(d.concepts.len(), 1);
+            assert_eq!((d.concepts[0].before.as_str(), d.concepts[0].after.as_str()), ("seen", "unseen"));
+        }
+        other => panic!("expected Disputed, got {other:?}"),
+    }
+}
+
+#[then("that answer moves nothing")]
+async fn answer_moves_nothing(w: &mut Kizn) {
+    let topic_id = w.topic_id();
+    match w.command(Command::GetProgress { topic_id }).await {
+        Ok(Reply::Progress(p)) => {
+            assert!(p.outcomes.iter().flat_map(|o| &o.concepts).all(|c| c.state == "unseen" && c.answers == 0));
+        }
+        other => panic!("expected Progress, got {other:?}"),
+    }
+    let s = w.read_summary().await;
+    assert_eq!((s.answered, s.slipped.len()), (0, 0));
+}
+
+#[then("the question never appears again")]
+async fn never_again(w: &mut Kizn) {
+    let item_id = w.deck.as_ref().unwrap().cards[0].item_id.clone();
+    assert_eq!(w.store().item(&item_id).unwrap().unwrap().status, "disputed");
+    w.clock.advance(chrono::Duration::days(4));
+    let deck = w.start_practice().await;
+    assert!(deck.cards.iter().all(|c| c.item_id != item_id), "the disputed question came back");
+}
+
+#[then("a replacement is written for its slot")]
+async fn replacement_written(w: &mut Kizn) {
+    let item_id = w.deck.as_ref().unwrap().cards[0].item_id.clone();
+    let item = w.store().item(&item_id).unwrap().unwrap();
+    let concept = item.concept_ids[0].clone();
+    let recall_for = |w: &Kizn| {
+        w.store()
+            .items(&item.outcome_id, Some("active"))
+            .unwrap()
+            .iter()
+            .filter(|i| i.kind == "recall" && i.concept_ids.first() == Some(&concept))
+            .count()
+    };
+    // The fixture held two; the disputed one leaves one until the writer refills.
+    for _ in 0..3000 {
+        if recall_for(w) >= 2 {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    panic!("no replacement written for the disputed question's slot");
+}
+
+// --- Ask about this --------------------------------------------------------------
+
+impl Kizn {
+    fn card_anchor(&self) -> kizn_app::Anchor {
+        kizn_app::Anchor::Card { item_id: self.deck.as_ref().unwrap().cards[0].item_id.clone() }
+    }
+
+    /// Asks about the card and waits for the whole reply; returns the deltas seen.
+    async fn ask(&mut self, text: &str, new: bool) -> (kizn_app::ThreadView, usize) {
+        let anchor = self.card_anchor();
+        self.ask_on(anchor, text, None, new).await
+    }
+
+    async fn ask_on(
+        &mut self,
+        anchor: kizn_app::Anchor,
+        text: &str,
+        passage: Option<String>,
+        new: bool,
+    ) -> (kizn_app::ThreadView, usize) {
+        self.ensure_open();
+        let mut rx = self.app().subscribe();
+        let thread_id = if new { None } else { self.thread.as_ref().map(|t| t.id.clone()) };
+        let started = match self.command(Command::Ask { anchor, thread_id, text: text.into(), passage }).await {
+            Ok(Reply::Thread(t)) => t,
+            other => panic!("expected a Thread, got {other:?}"),
+        };
+        let batches = |w: &Kizn| -> i64 {
+            let store = w.store();
+            [
+                "01SEEDOUTCOME0000000000001",
+                "01SEEDOUTCOME0000000000002",
+                "01SEEDOUTCOME0000000000003",
+                "01SEEDOUTCOME0000000000004",
+            ]
+            .iter()
+            .map(|o| store.batch_count(o).unwrap_or(0))
+            .sum()
+        };
+        let before = batches(self);
+        let mut deltas = 0;
+        loop {
+            match tokio::time::timeout(std::time::Duration::from_secs(10), rx.recv()).await {
+                Ok(Ok(Event::TutorDelta { thread_id, .. })) if thread_id == started.id => deltas += 1,
+                Ok(Ok(Event::TutorDone { thread_id, error })) if thread_id == started.id => {
+                    assert!(error.is_none(), "the tutor failed: {error:?}");
+                    self.batches_during_reply = Some(batches(self) - before);
+                    break;
+                }
+                Ok(Ok(_)) | Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => {}
+                other => panic!("no reply from the tutor: {other:?}"),
+            }
+        }
+        let t = match self.command(Command::GetThread { thread_id: started.id.clone() }).await {
+            Ok(Reply::Thread(t)) => t,
+            other => panic!("expected a Thread, got {other:?}"),
+        };
+        self.thread = Some(t.clone());
+        (t, deltas)
+    }
+}
+
+#[when(expr = "I ask about it {string}")]
+async fn ask_about_it(w: &mut Kizn, text: String) {
+    let before = w.progress_snapshot().await;
+    w.progress_before = Some(before);
+    let (_, deltas) = w.ask(&text, true).await;
+    w.deltas = deltas;
+}
+
+#[when(expr = "I ask about it again in a new conversation {string}")]
+async fn ask_again_new(w: &mut Kizn, text: String) {
+    w.ask(&text, true).await;
+}
+
+#[then("the tutor's reply streams in, about my pick and the key")]
+fn reply_streams(w: &mut Kizn) {
+    assert!(w.deltas > 3, "the reply arrived in {} pieces", w.deltas);
+    let t = w.thread.as_ref().unwrap();
+    assert_eq!(t.messages.len(), 2);
+    assert_eq!(t.messages[0].role, "learner");
+    let reply = &t.messages[1].text;
+    let key = w.stored_options(&w.deck.as_ref().unwrap().cards[0].item_id).into_iter().find(|o| o.correct).unwrap();
+    assert!(reply.contains("You picked") && reply.contains(&key.text) && reply.contains(&key.why), "{reply}");
+}
+
+#[then("the conversation is kept with the card")]
+async fn kept_with_card(w: &mut Kizn) {
+    let anchor = w.card_anchor();
+    match w.command(Command::GetThreads { anchor }).await {
+        Ok(Reply::Threads(ts)) => {
+            assert_eq!(ts.len(), 1);
+            assert_eq!(ts[0].messages, 2);
+        }
+        other => panic!("expected Threads, got {other:?}"),
+    }
+}
+
+#[then("no answer, concept state or recall date changes")]
+async fn nothing_moved(w: &mut Kizn) {
+    let now = w.progress_snapshot().await;
+    assert_eq!(Some(now), w.progress_before, "the tutor moved something");
+}
+
+#[then(expr = "the card shows {int} conversations")]
+async fn card_conversations(w: &mut Kizn, n: usize) {
+    let anchor = w.card_anchor();
+    match w.command(Command::GetThreads { anchor }).await {
+        Ok(Reply::Threads(ts)) => {
+            assert_eq!(ts.len(), n);
+            w.threads = ts;
+        }
+        other => panic!("expected Threads, got {other:?}"),
+    }
+}
+
+#[then("I can reopen either")]
+async fn reopen_either(w: &mut Kizn) {
+    for t in w.threads.clone() {
+        match w.command(Command::GetThread { thread_id: t.id.clone() }).await {
+            Ok(Reply::Thread(v)) => assert_eq!((v.messages.len(), v.title.as_str()), (2, t.title.as_str())),
+            other => panic!("expected a Thread, got {other:?}"),
+        }
+    }
+}
+
+// --- Read in kizn ------------------------------------------------------------------
+
+impl Kizn {
+    async fn open_resource(&mut self, kind: &str) -> kizn_app::ResourceView {
+        let id = self
+            .concept
+            .as_ref()
+            .expect("no concept open")
+            .sources
+            .iter()
+            .find(|s| s.kind == kind)
+            .unwrap_or_else(|| panic!("no {kind} offered"))
+            .id
+            .clone();
+        match self.command(Command::GetResource { source_id: id }).await {
+            Ok(Reply::Resource(r)) => {
+                self.resource = Some(r.clone());
+                r
+            }
+            other => panic!("expected a Resource, got {other:?}"),
+        }
+    }
+}
+
+#[given("a concept with a verified page")]
+async fn concept_with_page(w: &mut Kizn) {
+    missed_one(w).await;
+    open_concept(w).await;
+    assert!(w.concept.as_ref().unwrap().sources.iter().any(|s| s.kind == "page"));
+}
+
+#[when("I open it in kizn")]
+async fn open_in_kizn(w: &mut Kizn) {
+    w.open_resource("page").await;
+}
+
+#[then("I read its text with the concept on top")]
+fn read_text(w: &mut Kizn) {
+    let r = w.resource.as_ref().unwrap();
+    assert_eq!(r.concept, w.concept.as_ref().unwrap().statement);
+    assert!(r.blocks.iter().any(|b| b.kind == "h") && r.blocks.iter().filter(|b| b.kind == "p").count() >= 3);
+    assert!(r.cues.is_empty());
+}
+
+#[then("not the page's scripts or navigation")]
+fn no_scripts(w: &mut Kizn) {
+    let r = w.resource.as_ref().unwrap();
+    assert!(
+        r.blocks.iter().all(|b| !b.text.contains("analytics()") && !b.text.contains("Docs Guides Reference")),
+        "{:#?}",
+        r.blocks
+    );
+}
+
+#[when("kizn looks for resources for it")]
+async fn looks_for_resources(w: &mut Kizn) {
+    open_concept(w).await;
+}
+
+#[then("a video with captions is offered")]
+fn video_offered(w: &mut Kizn) {
+    let c = w.concept.as_ref().unwrap();
+    let v = c.sources.iter().find(|s| s.kind == "video").expect("no video offered");
+    assert!(v.url.contains("captioned-") && !v.automatic, "{v:?}");
+}
+
+#[then("opening it shows its transcript with timestamps")]
+async fn transcript_shown(w: &mut Kizn) {
+    let r = w.open_resource("video").await;
+    assert!(r.blocks.is_empty());
+    assert_eq!(r.cues.len(), 40);
+    assert!(r.cues.windows(2).all(|p| p[0].start < p[1].start));
+}
+
+#[then("the video without captions is recorded as having no transcript")]
+fn no_transcript(w: &mut Kizn) {
+    let concept_id = w.concept.as_ref().unwrap().concept_id.clone();
+    let rows = w.store().sources(&concept_id).unwrap();
+    let row = rows.iter().find(|r| r.url.contains("nocaptions-")).expect("the uncaptioned video wasn't checked");
+    assert_eq!(row.status, "rejected");
+    assert!(row.reason.as_deref().unwrap_or("").starts_with("no transcript"), "{row:?}");
+}
+
+#[when("I write a note while reading it")]
+async fn write_note(w: &mut Kizn) {
+    w.open_resource("page").await;
+    let concept_id = w.concept.as_ref().unwrap().concept_id.clone();
+    let r = w.command(Command::SaveNote { concept_id, text: "Layers are shared, so rebuilds are cheap.".into() }).await;
+    assert!(matches!(r, Ok(Reply::Note(_))), "{r:?}");
+}
+
+#[when("I come back to the concept later")]
+async fn come_back_later(w: &mut Kizn) {
+    // kizn closed and opened again.
+    w.app = None;
+    let concept_id = w.concept.as_ref().unwrap().concept_id.clone();
+    w.concept_from(Command::GetConcept { concept_id }).await;
+}
+
+#[then("the note is there")]
+fn note_there(w: &mut Kizn) {
+    assert_eq!(w.concept.as_ref().unwrap().note.as_deref(), Some("Layers are shared, so rebuilds are cheap."));
+}
+
+#[when(expr = "I add {string} to it")]
+async fn add_source(w: &mut Kizn, url: String) {
+    let concept_id = w.concept.as_ref().unwrap().concept_id.clone();
+    w.added = Some(match w.command(Command::AddSource { concept_id, url }).await {
+        Ok(Reply::Concept(c)) => Ok(c),
+        Err(AppError::Refused(why)) => Err(why),
+        other => panic!("unexpected {other:?}"),
+    });
+}
+
+#[then("kizn fetches it once and offers it")]
+fn added_offered(w: &mut Kizn) {
+    let c = w.added.clone().unwrap().expect("refused");
+    let own = c.sources.iter().find(|s| s.own).expect("not offered");
+    assert_eq!(own.host, "notes.example.com");
+    assert_eq!(own.kind, "page");
+}
+
+#[then("I'm told it couldn't be read, and why")]
+fn added_refused(w: &mut Kizn) {
+    let why = w.added.clone().unwrap().expect_err("it was offered");
+    assert!(why.contains("empty app shell"), "{why}");
+}
+
+// --- Asking about concepts, resources, passages -------------------------------------
+
+impl Kizn {
+    fn reply(&self) -> String {
+        self.thread.as_ref().unwrap().messages.last().unwrap().text.clone()
+    }
+
+    async fn threads_on(&mut self, anchor: kizn_app::Anchor) -> Vec<kizn_app::ThreadSummary> {
+        match self.command(Command::GetThreads { anchor }).await {
+            Ok(Reply::Threads(ts)) => ts,
+            other => panic!("expected Threads, got {other:?}"),
+        }
+    }
+}
+
+#[when(expr = "I ask about the concept {string}")]
+async fn ask_concept(w: &mut Kizn, text: String) {
+    let concept_id = w.concept.as_ref().unwrap().concept_id.clone();
+    w.ask_on(kizn_app::Anchor::Concept { concept_id }, &text, None, true).await;
+}
+
+#[then("the tutor's reply draws on the concept's resources")]
+fn reply_draws_resources(w: &mut Kizn) {
+    let first = w.concept.as_ref().unwrap().sources[0].title.clone();
+    let r = w.reply();
+    assert!(r.contains(&format!("From {first}:")) && r.contains("This page explains"), "{r}");
+}
+
+#[then(expr = "the concept shows {int} conversation")]
+async fn concept_conversations(w: &mut Kizn, n: usize) {
+    let concept_id = w.concept.as_ref().unwrap().concept_id.clone();
+    assert_eq!(w.threads_on(kizn_app::Anchor::Concept { concept_id }).await.len(), n);
+}
+
+#[when(expr = "I pick a passage in the page and ask {string}")]
+async fn ask_passage(w: &mut Kizn, text: String) {
+    let r = w.open_resource("page").await;
+    let passage = r.blocks.iter().find(|b| b.kind == "p").unwrap().text.chars().take(60).collect::<String>();
+    let source_id = r.source.id.clone();
+    w.ask_on(kizn_app::Anchor::Resource { source_id }, &text, Some(passage), true).await;
+}
+
+#[then("the tutor's reply is about that passage, from the page")]
+fn reply_passage(w: &mut Kizn) {
+    let r = w.reply();
+    let title = &w.resource.as_ref().unwrap().source.title;
+    assert!(
+        r.starts_with(&format!("About {title}")) && r.contains("On \"This page explains") && r.contains("From it:"),
+        "{r}"
+    );
+    let asked = &w.thread.as_ref().unwrap().messages[0].text;
+    assert!(asked.starts_with("> This page explains") && asked.ends_with("Explain this"), "{asked}");
+}
+
+#[then(expr = "the page shows {int} conversation")]
+async fn page_conversations(w: &mut Kizn, n: usize) {
+    let source_id = w.resource.as_ref().unwrap().source.id.clone();
+    assert_eq!(w.threads_on(kizn_app::Anchor::Resource { source_id }).await.len(), n);
+}
+
+#[when(expr = "I pick a moment in its video and ask {string}")]
+async fn ask_moment(w: &mut Kizn, text: String) {
+    let r = w.open_resource("video").await;
+    let cue = &r.cues[13];
+    let passage = format!("{}s: {}", cue.start, cue.text);
+    let source_id = r.source.id.clone();
+    w.ask_on(kizn_app::Anchor::Resource { source_id }, &text, Some(passage), true).await;
+}
+
+#[then("the tutor's reply says when in the video")]
+fn reply_moment(w: &mut Kizn) {
+    let r = w.reply();
+    assert!(r.contains("From it at ") && r.contains("On \"65s:"), "{r}");
+}
+
+#[when("a question about it is replaced")]
+async fn question_replaced(w: &mut Kizn) {
+    // The missed card's question disputed: its slot gets a replacement,
+    // written now that the concept has resources.
+    let attempt_id = w.answers[0].attempt_id.clone();
+    assert!(matches!(w.command(Command::Dispute { attempt_id }).await, Ok(Reply::Disputed(_))));
+}
+
+#[then("the new question cites one of its resources")]
+async fn cites_resource(w: &mut Kizn) {
+    let concept_id = w.concept.as_ref().unwrap().concept_id.clone();
+    let titles: Vec<String> = w.concept.as_ref().unwrap().sources.iter().map(|s| s.title.clone()).collect();
+    let outcome_id = w.store().concept(&concept_id).unwrap().unwrap().outcome_id;
+    for _ in 0..3000 {
+        let cited = w
+            .store()
+            .items(&outcome_id, Some("active"))
+            .unwrap()
+            .into_iter()
+            .find(|i| i.concept_ids.first() == Some(&concept_id) && i.source_ref.is_some());
+        if let Some(i) = cited {
+            assert!(!i.model_knowledge);
+            assert!(titles.contains(i.source_ref.as_ref().unwrap()), "{:?} isn't one of {titles:?}", i.source_ref);
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    let dump: Vec<(String, String, Option<String>, Option<String>)> = w
+        .store()
+        .items(&outcome_id, None)
+        .unwrap()
+        .into_iter()
+        .filter(|i| i.status == "refused")
+        .map(|i| (i.kind, i.status, i.status_reason, i.source_ref))
+        .collect();
+    let o = w.store().outcome(&outcome_id).unwrap().unwrap();
+    panic!("no question cites a resource: {dump:#?} {} {:?}", o.bank_state, o.bank_error);
+}
+
+#[given("an author and tutor that share a slow model")]
+async fn shared_slow(w: &mut Kizn) {
+    w.use_for(Role::Author, "slow", Behaviour::Slow, false).await;
+    w.use_for(Role::Checker, "slow", Behaviour::Slow, false).await;
+    w.use_for(Role::Tutor, "slow", Behaviour::Slow, false).await;
+}
+
+#[given("I missed a card while questions are being written")]
+async fn missed_while_writing(w: &mut Kizn) {
+    missed_a_card(w).await;
+    // Writing is under way (outcomes 3 and 4 have no questions yet).
+    for _ in 0..500 {
+        if w.store().batch_count("01SEEDOUTCOME0000000000003").unwrap()
+            + w.store().batch_count("01SEEDOUTCOME0000000000001").unwrap()
+            > 0
+        {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+}
+
+#[then("no new writing starts until the reply is done")]
+fn no_new_writing(w: &mut Kizn) {
+    assert_eq!(w.batches_during_reply, Some(0), "the writer started batches while the tutor answered");
 }
 
 #[tokio::main]

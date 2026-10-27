@@ -18,4 +18,4 @@ finding: string,
 /**
  * How many suggested pages kizn has fetched for it, whatever came of it.
  */
-checked: number, };
+checked: number, note: string | null, };

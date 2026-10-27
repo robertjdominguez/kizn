@@ -2703,6 +2703,7 @@ version = "0.1.0-rc.2"
 dependencies = [
  "chrono",
  "directories",
+ "futures-util",
  "keyring",
  "kizn-core",
  "kizn-model",

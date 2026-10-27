@@ -139,6 +139,10 @@ async fn handle(
     if method == Method::GET && path.starts_with("/web/") {
         return web_page(path);
     }
+    // The fake YouTube: watch pages and their caption tracks (any host).
+    if method == Method::GET && (path == "/watch" || path == "/api/timedtext") {
+        return youtube(path, uri.query().unwrap_or(""));
+    }
     let (behaviour, rest) = match path.trim_start_matches('/').split_once('/') {
         Some((first, rest)) if Behaviour::from_name(first).is_some() => {
             (Behaviour::from_name(first).unwrap(), format!("/{rest}"))
@@ -216,6 +220,46 @@ fn web_page(path: &str) -> Response {
     }
 }
 
+/// A watch page (`v=captioned-…` has an English caption track, anything else
+/// none) and its caption track, about whatever the id's slug says.
+fn youtube(path: &str, query: &str) -> Response {
+    let v = query.split('&').find_map(|kv| kv.strip_prefix("v=")).unwrap_or("").to_string();
+    let about = v.split_once('-').map(|(_, slug)| slug.replace('-', " ")).unwrap_or_default();
+    let reply = |content_type: &str, body: String| {
+        Response::builder().header(header::CONTENT_TYPE, content_type).body(Body::from(body)).unwrap()
+    };
+    if path == "/api/timedtext" {
+        let lines = [
+            format!("today we look at {about}"),
+            format!("in short, {about}"),
+            "let's see it on a real system".to_string(),
+            format!("here's the common mix-up about {about}"),
+            "and here's how to check it yourself".to_string(),
+        ];
+        let cues: String = (0..40)
+            .map(|i| format!(r#"<text start="{}.0" dur="4.0">{}</text>"#, i * 5, lines[i % lines.len()]))
+            .collect();
+        return reply(
+            "text/xml; charset=utf-8",
+            format!(r#"<?xml version="1.0" encoding="utf-8" ?><transcript>{cues}</transcript>"#),
+        );
+    }
+    let captions = if v.starts_with("captioned-") {
+        format!(
+            r#""captions":{{"playerCaptionsTracklistRenderer":{{"captionTracks":[{{"baseUrl":"https://www.youtube.com/api/timedtext?v={v}&lang=en","languageCode":"en","name":{{"simpleText":"English"}}}}]}}}},"#
+        )
+    } else {
+        String::new()
+    };
+    reply(
+        "text/html; charset=utf-8",
+        format!(
+            r#"<!doctype html><html><head><title>{about} explained - YouTube</title></head><body><div id="player"></div>
+<script>var ytInitialPlayerResponse = {{{captions}"videoDetails":{{"videoId":"{v}","title":"{about} explained"}}}};</script></body></html>"#
+        ),
+    )
+}
+
 fn percent_decode(s: &str) -> String {
     let bytes = s.as_bytes();
     let mut out = vec![];
@@ -244,6 +288,29 @@ fn error(status: StatusCode, message: &str) -> Response {
     (status, axum::Json(json!({"error": {"message": message}}))).into_response()
 }
 
+/// What a streamed reply says, word by word: a task's "text" (the tutor), or
+/// "kizn works." (the probe).
+fn streamed_words(answer: Option<&Value>) -> Vec<String> {
+    match answer.and_then(|a| a["text"].as_str()) {
+        Some(text) => text.split_inclusive(' ').map(str::to_string).collect(),
+        None => vec!["kizn ".into(), "works.".into()],
+    }
+}
+
+/// Server-sent events, a little apart when `paced` (so a streamed reply
+/// arrives word by word, as a real model's does).
+fn sse_paced(events: Vec<String>, paced: bool) -> Response {
+    if !paced {
+        return sse(events);
+    }
+    use futures_util::StreamExt;
+    let stream = futures_util::stream::iter(events).then(|e| async move {
+        tokio::time::sleep(std::time::Duration::from_millis(12)).await;
+        Ok::<_, std::convert::Infallible>(Bytes::from(format!("data: {e}\n\n")))
+    });
+    Response::builder().header(header::CONTENT_TYPE, "text/event-stream").body(Body::from_stream(stream)).unwrap()
+}
+
 fn sse(events: Vec<String>) -> Response {
     let body: String = events.into_iter().map(|e| format!("data: {e}\n\n")).collect();
     Response::builder().header(header::CONTENT_TYPE, "text/event-stream").body(Body::from(body)).unwrap()
@@ -265,10 +332,11 @@ fn openai(b: Behaviour, req: &Value, answer: Option<Value>) -> Response {
         if b == Behaviour::NoStream {
             return error(StatusCode::INTERNAL_SERVER_ERROR, "streaming is broken here");
         }
+        let words = streamed_words(answer.as_ref());
         let mut events: Vec<String> =
-            ["kizn ", "works."].iter().map(|t| json!({"choices": [{"delta": {"content": t}}]}).to_string()).collect();
+            words.iter().map(|t| json!({"choices": [{"delta": {"content": t}}]}).to_string()).collect();
         events.push("[DONE]".into());
-        return sse(events);
+        return sse_paced(events, words.len() > 2);
     }
     let schema = !req["response_format"].is_null();
     let answer = answer.map(|a| a.to_string()).unwrap_or_else(|| ANSWER.to_string());
@@ -297,12 +365,13 @@ fn anthropic(b: Behaviour, req: &Value, answer: Option<Value>) -> Response {
         if b == Behaviour::NoStream {
             return error(StatusCode::INTERNAL_SERVER_ERROR, "streaming is broken here");
         }
+        let words = streamed_words(answer.as_ref());
         let mut events = vec![json!({"type": "message_start"}).to_string()];
-        for t in ["kizn ", "works."] {
+        for t in &words {
             events.push(json!({"type": "content_block_delta", "delta": {"type": "text_delta", "text": t}}).to_string());
         }
         events.push(json!({"type": "message_stop"}).to_string());
-        return sse(events);
+        return sse_paced(events, words.len() > 2);
     }
     let tools = !req["tools"].is_null();
     let answer = answer.unwrap_or_else(|| json!({"ok": true, "word": "kizn"}));
@@ -434,6 +503,8 @@ impl FakeServer {
                     Some(c) => vec![c.to_string()],
                     None => concepts.iter().take(2).cloned().collect(),
                 };
+                // Written from a resource when one is given: cite it.
+                let cite = input["resources"][0]["title"].as_str();
                 let items: Vec<Value> = (0..count)
                     .map(|i| {
                         let n = self.next();
@@ -443,8 +514,8 @@ impl FakeServer {
                                 "concepts": named,
                                 "stem": format!("Explain {about} to {} who {}.", AUDIENCES[n % AUDIENCES.len()], SITUATIONS[(n / AUDIENCES.len()) % SITUATIONS.len()]),
                                 "exemplar": format!("A strong answer names {about}, says why it matters in practice, and gives one concrete example."),
-                                "source": "",
-                                "model_knowledge": true,
+                                "source": cite.unwrap_or(""),
+                                "model_knowledge": cite.is_none(),
                             });
                         }
                         let stem = format!(
@@ -467,16 +538,54 @@ impl FakeServer {
                                 {"text": "This only applies on the first run", "correct": false, "why": "nothing limits it to the first run", "misconception": "it happens once", "foundation": "none"},
                                 {"text": "This depends on the host's clock", "correct": false, "why": "time plays no part here", "misconception": "it is time-based", "foundation": "none"},
                             ],
-                            "source": "",
-                            "model_knowledge": true,
+                            "source": cite.unwrap_or(""),
+                            "model_knowledge": cite.is_none(),
                         })
                     })
                     .collect();
                 Some(json!({ "items": items }))
             }
+            "tutor" => {
+                // Grounded in the anchor, so a test can see it was loaded.
+                let anchor = &input["anchor"];
+                let text = match anchor["kind"].as_str() {
+                    Some("card") => format!(
+                        "You picked {}. The key is {}: {} You asked: {}",
+                        anchor["picked"].as_str().unwrap_or("?"),
+                        anchor["key"].as_str().unwrap_or("?"),
+                        anchor["key_why"].as_str().unwrap_or(""),
+                        s("question"),
+                    ),
+                    Some("resource") => {
+                        let excerpt = &anchor["excerpts"][0];
+                        format!(
+                            "About {}: you asked {}.{} From it{}: {}",
+                            anchor["title"].as_str().unwrap_or("this"),
+                            s("question"),
+                            input["passage"].as_str().map(|p| format!(" On \"{p}\".")).unwrap_or_default(),
+                            excerpt["at"].as_str().map(|at| format!(" at {at}")).unwrap_or_default(),
+                            excerpt["text"].as_str().unwrap_or("").chars().take(80).collect::<String>(),
+                        )
+                    }
+                    _ => format!(
+                        "About {}: you asked {}. From {}: {}",
+                        anchor["title"].as_str().unwrap_or("this"),
+                        s("question"),
+                        anchor["resources"][0]["title"].as_str().unwrap_or("my own knowledge"),
+                        anchor["resources"][0]["excerpts"][0]["text"]
+                            .as_str()
+                            .unwrap_or("")
+                            .chars()
+                            .take(80)
+                            .collect::<String>(),
+                    ),
+                };
+                Some(json!({ "text": text }))
+            }
             "suggest-sources" => {
-                // Two real pages around a dead link and an app shell: kizn
-                // should offer the two real ones only.
+                // Two real pages and a captioned video, around a dead link,
+                // an app shell and a video without captions: kizn should
+                // offer the three it can read.
                 let concept = s("concept");
                 let slug: String = concept
                     .chars()
@@ -486,6 +595,8 @@ impl FakeServer {
                     {"url": format!("https://docs.example.org/web/article/{slug}"), "title": format!("{concept}: the guide"), "why": "The official explanation, with a worked example."},
                     {"url": "https://old.example.org/web/missing", "title": "Archived notes", "why": "Background reading."},
                     {"url": "https://learn.example.com/web/shell", "title": "Interactive course", "why": "A hands-on walkthrough."},
+                    {"url": format!("https://www.youtube.com/watch?v=nocaptions-{slug}"), "title": "A talk without captions", "why": "A conference talk."},
+                    {"url": format!("https://www.youtube.com/watch?v=captioned-{slug}"), "title": format!("{concept}, shown"), "why": "A short demo on a real system."},
                     {"url": format!("https://blog.example.net/web/article/{slug}"), "title": format!("Understanding {concept}"), "why": "A plain-language take on the common mix-ups."},
                 ]}))
             }

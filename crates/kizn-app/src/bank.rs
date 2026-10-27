@@ -144,6 +144,50 @@ impl Ctx {
         Ok(None)
     }
 
+    /// Waits (up to a few minutes) while the tutor is answering on any of
+    /// these providers.
+    async fn wait_for_tutor(&self, providers: &[&str]) {
+        for _ in 0..900 {
+            let busy = self.tutoring.lock().unwrap().values().any(|p| providers.contains(&p.as_str()));
+            if !busy {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+    }
+
+    /// Up to three resources kizn holds for a concept (or, for a scenario
+    /// slot, the outcome's concepts), each with the excerpts that best match.
+    fn resources_for(&self, concept: Option<&str>, concepts: &[kizn_store::ConceptRow]) -> Vec<Value> {
+        let ids: Vec<&kizn_store::ConceptRow> = match concept {
+            Some(id) => concepts.iter().filter(|c| c.id == id).collect(),
+            None => concepts.iter().collect(),
+        };
+        let mut out = vec![];
+        for c in ids {
+            for s in self.store.sources(&c.id).unwrap_or_default() {
+                if out.len() >= 3 {
+                    return out;
+                }
+                if s.status != "verified" || s.content_json.is_none() {
+                    continue;
+                }
+                let content = s.content_json.as_deref().unwrap_or("[]");
+                let chunks = if s.kind == "video" {
+                    let cues: Vec<kizn_core::source::Cue> = serde_json::from_str(content).unwrap_or_default();
+                    kizn_core::source::cue_chunks(&cues, 60.0)
+                } else {
+                    let blocks: Vec<kizn_core::source::Block> = serde_json::from_str(content).unwrap_or_default();
+                    kizn_core::source::page_chunks(&blocks, 120)
+                };
+                let picked: Vec<String> =
+                    kizn_core::source::relevant(&chunks, &c.statement, 2).into_iter().map(|ch| ch.text).collect();
+                out.push(json!({ "title": s.title, "url": s.url, "concept": c.statement, "excerpts": picked }));
+            }
+        }
+        out
+    }
+
     fn fail(&self, o: &OutcomeRow, why: &str, retry_in: chrono::Duration) {
         let retry = sql_time(self.deps.clock.now() + retry_in);
         let _ = self.store.set_bank_state(&o.id, "failed", Some(why), Some(&retry));
@@ -159,6 +203,9 @@ impl Ctx {
             Ok(m) => m,
             Err(e) => return self.fail(o, &e.to_string(), chrono::Duration::minutes(RETRY_AFTER_MINUTES)),
         };
+        // The learner comes first: while the tutor answers on the same model,
+        // the writer waits before its next call.
+        self.wait_for_tutor(&[author.provider.as_str(), checker.provider.as_str()]).await;
         match self.write_batch(o, &job.slot, job.count, &author, &checker).await {
             Err(e) => self.fail(o, &e.to_string(), chrono::Duration::minutes(RETRY_AFTER_MINUTES)),
             Ok(_) => {
@@ -226,9 +273,19 @@ impl Ctx {
                 if kind == ItemKind::Target { " It's the outcome's target level." } else { "" }
             ),
         };
+        // The resources kizn holds for the slot's concept(s): write from them,
+        // and cite them.
+        let resources = self.resources_for(slot_concept.map(|c| c.id.as_str()), &concepts);
+        let cite_rule = if resources.is_empty() {
+            String::new()
+        } else {
+            " Write from the excerpts of the resources listed below: set \"source\" to the title of the resource you \
+             used, exactly as given, and \"model_knowledge\" to false."
+                .to_string()
+        };
         let ask = format!(
-            "Write {count} {} item{}. {concept_rule} A wrong option's \"foundation\" names a more basic topic \
-             than \"{}\", never \"{}\" itself (or \"none\").\n\n<input>\n{}\n</input>",
+            "Write {count} {} item{}. {concept_rule}{cite_rule} A wrong option's \"foundation\" names a more basic \
+             topic than \"{}\", never \"{}\" itself (or \"none\").\n\n<input>\n{}\n</input>",
             slot.kind.name(),
             if count == 1 { "" } else { "s" },
             topic.title,
@@ -240,6 +297,7 @@ impl Ctx {
                 "slot_concept": slot_concept.map(|c| c.statement.as_str()),
                 "existing_stems": existing.iter().map(|(s, _)| s.as_str()).collect::<Vec<_>>(),
                 "topics": all_topics.iter().map(|t| t.title.as_str()).collect::<Vec<_>>(),
+                "resources": resources,
             })
         );
 
@@ -283,6 +341,11 @@ impl Ctx {
                     },
                 },
             };
+            let given: Vec<&str> = resources.iter().filter_map(|r| r["title"].as_str()).collect();
+            let cited: Option<String> = item
+                .as_ref()
+                .and_then(|i| i.source_ref.as_deref())
+                .and_then(|claim| given.iter().find(|t| t.eq_ignore_ascii_case(claim.trim())).map(|t| t.to_string()));
             let row = ItemRow {
                 id: self.id(),
                 topic_id: topic.id.clone(),
@@ -303,8 +366,9 @@ impl Ctx {
                     .and_then(|i| i.options.as_ref())
                     .map(|o| serde_json::to_string(o).expect("options serialise")),
                 exemplar: item.as_ref().and_then(|i| i.exemplar.clone()),
-                source_ref: item.as_ref().and_then(|i| i.source_ref.clone()),
-                model_knowledge: item.as_ref().is_none_or(|i| i.model_knowledge),
+                // A citation counts only if it names a resource kizn gave it.
+                source_ref: cited.clone(),
+                model_knowledge: cited.is_none(),
                 status: status.into(),
                 status_reason: reason,
                 created_at: self.now(),

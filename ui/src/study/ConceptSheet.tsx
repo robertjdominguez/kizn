@@ -1,6 +1,6 @@
-import { Check, ExternalLink, LoaderCircle, RotateCw, X } from "lucide-react";
+import { Check, ExternalLink, FileText, LoaderCircle, MessageCircle, Play, Plus, RotateCw, X } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ConceptPageView } from "../bindings/ConceptPageView";
 import { ConceptMark } from "../components/ConceptMark";
 import { Reveal } from "../components/Reveal";
@@ -9,6 +9,9 @@ import { openExternal } from "../external";
 import { bead, EASE, fade, GLIDE, pop, presence, stage } from "../motion";
 import { whenDue } from "../practice/Summary";
 import { call } from "../rpc";
+import { TutorSheet } from "../tutor/TutorSheet";
+import { conversations, useConversations } from "../tutor/useConversations";
+import { Reader } from "./Reader";
 
 // A concept to learn, sliding in over whatever opened it (the summary): the
 // concept, the pages kizn checked and could read, and "Mark studied".
@@ -46,16 +49,28 @@ function Sheet({ conceptId, onClose }: { conceptId: string; onClose: () => void 
   const [c, setC] = useState<ConceptPageView | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // A resource open in the reader, over the sheet.
+  const [reading, setReading] = useState<string | null>(null);
+  // Asking the tutor about the concept, over the sheet.
+  const [asking, setAsking] = useState(false);
+  const [talks, recount] = useConversations({ kind: "concept", concept_id: conceptId });
+  const readingNow = useRef<string | null>(null);
+  readingNow.current = reading ?? (asking ? "asking" : null);
 
   const load = useCallback(() => {
     call({ type: "get_concept", concept_id: conceptId })
       .then(setC)
       .catch((e: Error) => setError(e.message));
   }, [conceptId]);
+  const closeReader = useCallback(() => {
+    setReading(null);
+    load();
+  }, [load]);
 
   useEffect(() => {
     load();
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    // Escape closes the reader first, when it's open.
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && !readingNow.current && onClose();
     window.addEventListener("keydown", onKey);
     const off = subscribe((e) => {
       if (e.type === "topic_changed") load();
@@ -108,9 +123,19 @@ function Sheet({ conceptId, onClose }: { conceptId: string; onClose: () => void 
                 {c.statement}
               </h2>
             </motion.div>
+            <motion.div variants={pop}>
+              <button
+                type="button"
+                onClick={() => setAsking(true)}
+                className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-ink-3 ring-1 ring-hairline transition-colors hover:bg-raised hover:text-ink"
+              >
+                <MessageCircle size={12} aria-hidden /> Ask about this concept
+                <span className="text-ink-4">{conversations(talks)}</span>
+              </button>
+            </motion.div>
             <motion.section variants={pop} aria-labelledby="sources-title" className="flex flex-col gap-2">
               <h3 id="sources-title" className="text-[11px] font-semibold uppercase tracking-wide text-ink-3">
-                Read
+                Learn from
               </h3>
               <AnimatePresence mode="wait" initial={false}>
                 {c.finding === "finding" || c.finding === "not_started" ? (
@@ -133,19 +158,28 @@ function Sheet({ conceptId, onClose }: { conceptId: string; onClose: () => void 
                     className="flex flex-col divide-y divide-hairline overflow-hidden rounded-lg border border-hairline bg-canvas"
                   >
                     {c.sources.map((s) => (
-                      <motion.li key={s.url} variants={pop}>
+                      <motion.li key={s.url} variants={pop} className="group flex items-center">
+                        <button
+                          type="button"
+                          onClick={() => setReading(s.id)}
+                          className="flex min-w-0 flex-1 items-center gap-3 px-3 py-2.5 text-left transition-colors hover:bg-raised/40"
+                        >
+                          {s.kind === "video" ? (
+                            <Play size={13} className="shrink-0 text-ink-4" aria-label="Video" />
+                          ) : (
+                            <FileText size={13} className="shrink-0 text-ink-4" aria-label="Page" />
+                          )}
+                          <span className="min-w-0 flex-1 truncate text-sm text-ink">{s.title}</span>
+                          <span className="shrink-0 text-xs text-ink-4">{s.host}</span>
+                        </button>
                         <button
                           type="button"
                           onClick={() => openExternal(s.url)}
-                          className="group flex w-full items-center gap-3 px-3 py-2.5 text-left transition-colors hover:bg-raised/40"
+                          aria-label={s.kind === "video" ? "Watch on YouTube" : "Open in browser"}
+                          title={s.kind === "video" ? "Watch on YouTube" : "Open in browser"}
+                          className="px-3 py-2.5 text-ink-4 transition-colors hover:text-accent"
                         >
-                          <span className="min-w-0 flex-1 truncate text-sm text-ink">{s.title}</span>
-                          <span className="shrink-0 text-xs text-ink-4">{s.host}</span>
-                          <ExternalLink
-                            size={13}
-                            className="shrink-0 text-ink-4 transition-colors group-hover:text-accent"
-                            aria-hidden
-                          />
+                          <ExternalLink size={13} aria-hidden />
                         </button>
                       </motion.li>
                     ))}
@@ -153,7 +187,7 @@ function Sheet({ conceptId, onClose }: { conceptId: string; onClose: () => void 
                 ) : (
                   <motion.div key="none" variants={fade} {...presence} className="flex flex-col gap-2">
                     <p className="text-sm text-ink-3">
-                      kizn couldn't find a page it could check for this one
+                      kizn couldn't find anything it could check for this one
                       {c.checked > 0 && ` (it tried ${c.checked})`}.
                     </p>
                     <button
@@ -168,7 +202,16 @@ function Sheet({ conceptId, onClose }: { conceptId: string; onClose: () => void 
                 )}
               </AnimatePresence>
               <p className="text-xs text-ink-4">kizn opened each of these and checked it's about this concept.</p>
+              <AddOwn conceptId={c.concept_id} onAdded={setC} />
             </motion.section>
+            {c.note && (
+              <motion.section variants={pop} aria-label="Your note" className="flex flex-col gap-1.5">
+                <h3 className="text-[11px] font-semibold uppercase tracking-wide text-ink-3">Your note</h3>
+                <p className="whitespace-pre-wrap rounded-lg bg-canvas/60 px-3 py-2 text-sm text-ink-2 ring-1 ring-hairline">
+                  {c.note}
+                </p>
+              </motion.section>
+            )}
           </>
         )}
       </motion.div>
@@ -207,6 +250,75 @@ function Sheet({ conceptId, onClose }: { conceptId: string; onClose: () => void 
           {when && <span className="text-xs text-ink-3">Comes back {when} either way</span>}
         </motion.div>
       )}
+      <TutorSheet
+        anchor={asking ? { kind: "concept", concept_id: conceptId } : null}
+        context={<p className="text-sm text-ink">{c?.statement}</p>}
+        starters={[
+          { label: "Explain it simply" },
+          { label: "Give me an example" },
+          { label: "What's a common mix-up?" },
+          { label: "How do I use this in practice?" },
+          { label: "Quiz me on it" },
+        ]}
+        onClose={() => {
+          setAsking(false);
+          recount();
+        }}
+      />
+      <Reader sourceId={reading} onClose={closeReader} />
     </>
+  );
+}
+
+// The learner's own resource: a URL, fetched and checked like kizn's.
+function AddOwn({ conceptId, onAdded }: { conceptId: string; onAdded: (c: ConceptPageView) => void }) {
+  const [url, setUrl] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const add = () => {
+    if (!url.trim()) return;
+    setBusy(true);
+    setError(null);
+    call({ type: "add_source", concept_id: conceptId, url: url.trim() })
+      .then((c) => {
+        onAdded(c);
+        setUrl("");
+      })
+      .catch((e: Error) => setError(e.message))
+      .finally(() => setBusy(false));
+  };
+  return (
+    <form
+      className="mt-1 flex flex-col gap-1.5"
+      onSubmit={(e) => {
+        e.preventDefault();
+        add();
+      }}
+    >
+      <div className="flex items-center gap-2">
+        <input
+          value={url}
+          onChange={(e) => setUrl(e.target.value)}
+          placeholder="Add your own: https://…"
+          aria-label="Add your own resource"
+          className="min-w-0 flex-1 rounded-lg border border-hairline bg-canvas px-3 py-1.5 text-sm text-ink outline-none placeholder:text-ink-4 focus:border-accent/50"
+        />
+        <button
+          type="submit"
+          disabled={busy || !url.trim()}
+          className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs text-ink-3 ring-1 ring-hairline transition-colors hover:bg-raised hover:text-ink disabled:opacity-50"
+        >
+          {busy ? <LoaderCircle size={12} className="animate-spin" aria-hidden /> : <Plus size={12} aria-hidden />}
+          {busy ? "Checking…" : "Add"}
+        </button>
+      </div>
+      <AnimatePresence>
+        {error && (
+          <motion.p key="e" variants={pop} initial="hidden" animate="shown" exit="gone" className="text-xs text-warn">
+            {error}
+          </motion.p>
+        )}
+      </AnimatePresence>
+    </form>
   );
 }

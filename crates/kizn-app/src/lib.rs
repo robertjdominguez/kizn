@@ -13,6 +13,7 @@ mod secrets;
 mod settings;
 mod study;
 mod topics;
+mod tutor;
 
 use std::collections::HashMap;
 use std::sync::atomic::AtomicBool;
@@ -23,10 +24,11 @@ use kizn_store::Store;
 use tokio::sync::broadcast;
 
 pub use command::{
-    AnswerView, AppError, AppInfo, CardView, CheckView, Command, ConceptChange, ConceptLine, ConceptPageView,
-    ConceptProgress, ConceptView, DayView, DeckView, DraftInput, DraftOutcome, Event, KeyView, NextStep,
-    OptionFeedback, OutcomeProgress, OutcomeStanding, OutcomeView, ProgressView, ProviderView, Reply, Role, RolesView,
-    SettingsView, SlotView, SourceView, StateCounts, SummaryView, TodayView, TopicSummary, TopicView,
+    Anchor, AnswerView, AppError, AppInfo, BlockView, CardView, CheckView, Command, ConceptChange, ConceptLine,
+    ConceptPageView, ConceptProgress, ConceptView, CueView, DayView, DeckView, DisputeView, DraftInput, DraftOutcome,
+    Event, KeyView, MessageView, NextStep, NoteView, OptionFeedback, OutcomeProgress, OutcomeStanding, OutcomeView,
+    ProgressView, ProviderView, Reply, ResourceView, Role, RolesView, SettingsView, SlotView, SourceView, StateCounts,
+    SummaryView, ThreadSummary, ThreadView, TodayView, TopicSummary, TopicView,
 };
 pub use config::{CONFIG_FILE, Config};
 pub use kizn_model::Http;
@@ -71,6 +73,9 @@ pub struct Ctx {
     events: broadcast::Sender<Event>,
     /// Concepts whose sources are being looked for right now.
     sourcing: Arc<Mutex<std::collections::HashSet<String>>>,
+    /// Conversations the tutor is answering right now, and the provider
+    /// answering each (the bank writer waits for it on the same one).
+    tutoring: Arc<Mutex<HashMap<String, String>>>,
 }
 
 pub struct App {
@@ -99,14 +104,23 @@ impl App {
                 .map_err(|e| AppError::Io(format!("couldn't create the directory {}: {e}", dir.display())))?;
         }
         let store = Store::open(&paths.data_dir.join(DB_FILE))?;
-        let (events, _) = broadcast::channel(64);
+        // Room for a tutor reply streaming word by word while the bank writer
+        // reports; the UI re-reads a finished reply anyway.
+        let (events, _) = broadcast::channel(1024);
         // Without a watcher kizn still works; Settings just won't follow
         // hand edits until it's reopened.
         let watcher = events::watch_config(&paths.config_dir, events.clone())
             .map_err(|e| eprintln!("kizn: not watching config.toml: {e}"))
             .ok();
         Ok(App {
-            ctx: Ctx { paths, store: Arc::new(store), deps, events, sourcing: Arc::default() },
+            ctx: Ctx {
+                paths,
+                store: Arc::new(store),
+                deps,
+                events,
+                sourcing: Arc::default(),
+                tutoring: Arc::default(),
+            },
             drafting: Mutex::new(HashMap::new()),
             bank_wake: Arc::new(tokio::sync::Notify::new()),
             bank_started: AtomicBool::new(false),
@@ -181,6 +195,20 @@ impl App {
             Command::GetConcept { concept_id } => self.open_concept(&concept_id).map(Reply::Concept),
             Command::FindSources { concept_id } => self.find_again(&concept_id).map(Reply::Concept),
             Command::MarkStudied { concept_id } => self.mark_studied(&concept_id).map(Reply::Concept),
+            Command::GetResource { source_id } => self.resource(&source_id).await.map(Reply::Resource),
+            Command::SaveNote { concept_id, text } => self.save_note(&concept_id, &text).map(Reply::Note),
+            Command::AddSource { concept_id, url } => self.add_source(&concept_id, &url).await.map(Reply::Concept),
+            Command::Ask { anchor, thread_id, text, passage } => {
+                self.ask(&anchor, thread_id.as_deref(), &text, passage.as_deref()).map(Reply::Thread)
+            }
+            Command::GetThreads { anchor } => self.threads(&anchor).map(Reply::Threads),
+            Command::GetThread { thread_id } => self.get_thread(&thread_id).map(Reply::Thread),
+            Command::Dispute { attempt_id } => {
+                let reply = self.dispute(&attempt_id).map(Reply::Disputed);
+                // The slot is short now: write its replacement.
+                self.wake_bank();
+                reply
+            }
         }
     }
 }

@@ -79,6 +79,27 @@ pub struct AttemptRow {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ThreadRow {
+    pub id: String,
+    pub topic_id: String,
+    pub anchor_kind: String,
+    pub anchor_id: String,
+    pub title: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MessageRow {
+    pub id: String,
+    pub thread_id: String,
+    /// learner | tutor
+    pub role: String,
+    pub text: String,
+    pub at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SourceRow {
     pub id: String,
     pub concept_id: String,
@@ -90,6 +111,14 @@ pub struct SourceRow {
     pub reason: Option<String>,
     pub words: Option<i64>,
     pub checked_at: String,
+    /// page | video
+    pub kind: String,
+    /// The text kept for reading: [Block] for a page, [Cue] for a video.
+    pub content_json: Option<String>,
+    /// A video's captions were generated, not written by a person.
+    pub automatic: bool,
+    /// kizn | learner
+    pub added_by: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -407,9 +436,23 @@ impl Store {
 
     pub fn insert_source(&self, s: &SourceRow) -> Result<()> {
         self.conn.lock().unwrap().execute(
-            "INSERT INTO sources (id, concept_id, url, title, why, status, reason, words, checked_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-            params![s.id, s.concept_id, s.url, s.title, s.why, s.status, s.reason, s.words, s.checked_at],
+            "INSERT INTO sources (id, concept_id, url, title, why, status, reason, words, checked_at, kind, content_json, automatic, added_by)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+            params![
+                s.id,
+                s.concept_id,
+                s.url,
+                s.title,
+                s.why,
+                s.status,
+                s.reason,
+                s.words,
+                s.checked_at,
+                s.kind,
+                s.content_json,
+                s.automatic as i64,
+                s.added_by
+            ],
         )?;
         Ok(())
     }
@@ -417,22 +460,116 @@ impl Store {
     /// A concept's sources, oldest first: every one checked, whatever came of it.
     pub fn sources(&self, concept_id: &str) -> Result<Vec<SourceRow>> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(
-            "SELECT id, concept_id, url, title, why, status, reason, words, checked_at FROM sources
-             WHERE concept_id = ?1 ORDER BY checked_at, rowid",
+        let mut stmt = conn
+            .prepare(&format!("SELECT {SOURCE_COLS} FROM sources WHERE concept_id = ?1 ORDER BY checked_at, rowid"))?;
+        let rows = stmt.query_map([concept_id], source)?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    pub fn source(&self, id: &str) -> Result<Option<SourceRow>> {
+        let conn = self.conn.lock().unwrap();
+        Ok(conn.query_row(&format!("SELECT {SOURCE_COLS} FROM sources WHERE id = ?1"), [id], source).optional()?)
+    }
+
+    /// Keeps a resource's text (for one checked before kizn kept it).
+    pub fn set_source_content(&self, id: &str, content_json: &str) -> Result<()> {
+        self.conn
+            .lock()
+            .unwrap()
+            .execute("UPDATE sources SET content_json = ?2 WHERE id = ?1", params![id, content_json])?;
+        Ok(())
+    }
+
+    pub fn note(&self, concept_id: &str) -> Result<Option<String>> {
+        let conn = self.conn.lock().unwrap();
+        Ok(conn.query_row("SELECT text FROM notes WHERE concept_id = ?1", [concept_id], |r| r.get(0)).optional()?)
+    }
+
+    /// Saves a concept's note; an empty note is removed.
+    pub fn save_note(&self, concept_id: &str, text: &str, at: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        if text.trim().is_empty() {
+            conn.execute("DELETE FROM notes WHERE concept_id = ?1", [concept_id])?;
+        } else {
+            conn.execute(
+                "INSERT INTO notes (concept_id, text, updated_at) VALUES (?1, ?2, ?3)
+                 ON CONFLICT (concept_id) DO UPDATE SET text = ?2, updated_at = ?3",
+                params![concept_id, text, at],
+            )?;
+        }
+        Ok(())
+    }
+
+    /// The learner says an answer's question has the wrong key: the answer
+    /// stops counting and the question is retired as disputed. One
+    /// transaction. Returns the item's id.
+    pub fn dispute(&self, attempt_id: &str, at: &str) -> Result<Option<String>> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        let item: Option<String> =
+            tx.query_row("SELECT item_id FROM attempts WHERE id = ?1", [attempt_id], |r| r.get(0)).optional()?;
+        if let Some(item) = &item {
+            tx.execute(
+                "UPDATE attempts SET disputed_at = ?2 WHERE id = ?1 AND disputed_at IS NULL",
+                params![attempt_id, at],
+            )?;
+            tx.execute(
+                "UPDATE items SET status = 'disputed', status_reason = 'disputed: the learner says the key is wrong' WHERE id = ?1",
+                [item],
+            )?;
+        }
+        tx.commit()?;
+        Ok(item)
+    }
+
+    pub fn insert_thread(&self, t: &ThreadRow) -> Result<()> {
+        self.conn.lock().unwrap().execute(
+            "INSERT INTO threads (id, topic_id, anchor_kind, anchor_id, title, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![t.id, t.topic_id, t.anchor_kind, t.anchor_id, t.title, t.created_at, t.updated_at],
         )?;
-        let rows = stmt.query_map([concept_id], |r| {
-            Ok(SourceRow {
-                id: r.get(0)?,
-                concept_id: r.get(1)?,
-                url: r.get(2)?,
-                title: r.get(3)?,
-                why: r.get(4)?,
-                status: r.get(5)?,
-                reason: r.get(6)?,
-                words: r.get(7)?,
-                checked_at: r.get(8)?,
-            })
+        Ok(())
+    }
+
+    pub fn thread(&self, id: &str) -> Result<Option<ThreadRow>> {
+        let conn = self.conn.lock().unwrap();
+        Ok(conn
+            .query_row(
+                "SELECT id, topic_id, anchor_kind, anchor_id, title, created_at, updated_at FROM threads WHERE id = ?1",
+                [id],
+                thread,
+            )
+            .optional()?)
+    }
+
+    /// An anchor's conversations, newest first.
+    pub fn threads(&self, anchor_kind: &str, anchor_id: &str) -> Result<Vec<ThreadRow>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, topic_id, anchor_kind, anchor_id, title, created_at, updated_at FROM threads
+             WHERE anchor_kind = ?1 AND anchor_id = ?2 ORDER BY updated_at DESC, id DESC",
+        )?;
+        let rows = stmt.query_map([anchor_kind, anchor_id], thread)?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Adds a message and touches its thread.
+    pub fn add_message(&self, m: &MessageRow) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO messages (id, thread_id, role, text, at) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![m.id, m.thread_id, m.role, m.text, m.at],
+        )?;
+        conn.execute("UPDATE threads SET updated_at = ?2 WHERE id = ?1", params![m.thread_id, m.at])?;
+        Ok(())
+    }
+
+    pub fn messages(&self, thread_id: &str) -> Result<Vec<MessageRow>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt =
+            conn.prepare("SELECT id, thread_id, role, text, at FROM messages WHERE thread_id = ?1 ORDER BY at, rowid")?;
+        let rows = stmt.query_map([thread_id], |r| {
+            Ok(MessageRow { id: r.get(0)?, thread_id: r.get(1)?, role: r.get(2)?, text: r.get(3)?, at: r.get(4)? })
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
@@ -493,6 +630,39 @@ impl Store {
         )?;
         Ok(stmt.query_map(params![outcome_id, n], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?)
     }
+}
+
+const SOURCE_COLS: &str =
+    "id, concept_id, url, title, why, status, reason, words, checked_at, kind, content_json, automatic, added_by";
+
+fn source(r: &rusqlite::Row) -> rusqlite::Result<SourceRow> {
+    Ok(SourceRow {
+        id: r.get(0)?,
+        concept_id: r.get(1)?,
+        url: r.get(2)?,
+        title: r.get(3)?,
+        why: r.get(4)?,
+        status: r.get(5)?,
+        reason: r.get(6)?,
+        words: r.get(7)?,
+        checked_at: r.get(8)?,
+        kind: r.get(9)?,
+        content_json: r.get(10)?,
+        automatic: r.get::<_, i64>(11)? != 0,
+        added_by: r.get(12)?,
+    })
+}
+
+fn thread(r: &rusqlite::Row) -> rusqlite::Result<ThreadRow> {
+    Ok(ThreadRow {
+        id: r.get(0)?,
+        topic_id: r.get(1)?,
+        anchor_kind: r.get(2)?,
+        anchor_id: r.get(3)?,
+        title: r.get(4)?,
+        created_at: r.get(5)?,
+        updated_at: r.get(6)?,
+    })
 }
 
 #[cfg(test)]

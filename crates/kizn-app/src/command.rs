@@ -104,6 +104,44 @@ pub enum Command {
     MarkStudied {
         concept_id: String,
     },
+    /// A resource to read in kizn: a page's text or a video's transcript.
+    GetResource {
+        source_id: String,
+    },
+    /// A concept's note (one per concept; empty removes it).
+    SaveNote {
+        concept_id: String,
+        text: String,
+    },
+    /// The learner's own resource for a concept: fetched and checked like
+    /// kizn's; refused with the reason when it can't be read.
+    AddSource {
+        concept_id: String,
+        url: String,
+    },
+    /// "This key is wrong": the answer stops counting, the question is
+    /// retired, and a replacement is written for its slot.
+    Dispute {
+        attempt_id: String,
+    },
+    /// Asks the tutor about an anchor: a new conversation, or `thread_id`'s.
+    /// The reply streams as events.
+    Ask {
+        anchor: Anchor,
+        #[ts(optional)]
+        thread_id: Option<String>,
+        text: String,
+        /// A passage (or a video's moment) the question is about.
+        #[ts(optional)]
+        passage: Option<String>,
+    },
+    /// An anchor's conversations, newest first.
+    GetThreads {
+        anchor: Anchor,
+    },
+    GetThread {
+        thread_id: String,
+    },
 }
 
 /// A draft as the learner shaped it.
@@ -140,6 +178,20 @@ pub enum Reply {
     Summary(SummaryView),
     Progress(ProgressView),
     Concept(ConceptPageView),
+    Disputed(DisputeView),
+    Thread(ThreadView),
+    Resource(ResourceView),
+    Note(NoteView),
+    Threads(Vec<ThreadSummary>),
+}
+
+/// After a dispute: each concept the question named, back where it was
+/// before the answer.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct DisputeView {
+    pub attempt_id: String,
+    pub concepts: Vec<ConceptChange>,
 }
 
 /// A concept to study: what it says, where it sits, and the sources kizn
@@ -165,11 +217,15 @@ pub struct ConceptPageView {
     /// How many suggested pages kizn has fetched for it, whatever came of it.
     #[ts(type = "number")]
     pub checked: i64,
+    pub note: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct SourceView {
+    pub id: String,
+    /// "page" or "video".
+    pub kind: String,
     pub url: String,
     pub title: String,
     pub why: Option<String>,
@@ -177,6 +233,48 @@ pub struct SourceView {
     pub host: String,
     #[ts(type = "number")]
     pub words: i64,
+    /// A video's captions were generated, not written by a person.
+    pub automatic: bool,
+    /// The learner added it.
+    pub own: bool,
+}
+
+/// A resource in kizn's reader: the concept it's for, and its text.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct ResourceView {
+    pub source: SourceView,
+    pub concept_id: String,
+    pub concept: String,
+    pub topic_id: String,
+    /// A page's text.
+    pub blocks: Vec<BlockView>,
+    /// A video's transcript.
+    pub cues: Vec<CueView>,
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct BlockView {
+    /// "h", "p", "li" or "pre".
+    pub kind: String,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct CueView {
+    /// Seconds into the video.
+    pub start: f64,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct NoteView {
+    pub concept_id: String,
+    pub text: String,
 }
 
 /// A practice set: cards with their options in the order to show them. No
@@ -557,6 +655,58 @@ pub enum Event {
     ConfigChanged,
     /// A topic's draft or bank moved on: refetch it.
     TopicChanged { topic_id: String },
+    /// More of the tutor's reply.
+    TutorDelta { thread_id: String, text: String },
+    /// The tutor's reply is finished (and kept), or failed.
+    TutorDone { thread_id: String, error: Option<String> },
+}
+
+/// What a conversation with the tutor is about.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+#[ts(export)]
+pub enum Anchor {
+    /// A practice question (as the learner last answered it).
+    Card {
+        item_id: String,
+    },
+    Concept {
+        concept_id: String,
+    },
+    /// A resource (a page or a video) kizn holds as text.
+    Resource {
+        source_id: String,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct ThreadView {
+    pub id: String,
+    /// The first question.
+    pub title: String,
+    pub anchor: Anchor,
+    pub messages: Vec<MessageView>,
+    /// The tutor is answering now (follow TutorDelta / TutorDone).
+    pub streaming: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct MessageView {
+    /// "learner" or "tutor".
+    pub role: String,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct ThreadSummary {
+    pub id: String,
+    pub title: String,
+    #[ts(type = "number")]
+    pub messages: i64,
+    pub updated_at: String,
 }
 
 /// The home screen.
