@@ -44,7 +44,7 @@ const slide = {
 };
 
 /** `#/new-topic` (no id) starts at Goal; `#/setup/<id>` resumes a draft. */
-export function Setup({ topicId }: { topicId?: string }) {
+export function Setup({ topicId, foundation }: { topicId?: string; foundation?: string }) {
   const [topic, setTopic] = useState<TopicView | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -88,7 +88,7 @@ export function Setup({ topicId }: { topicId?: string }) {
           exit="exit"
           className="rounded-xl border border-hairline-strong bg-subtle p-5 shadow-xl shadow-black/20"
         >
-          {step === 0 && <GoalStep />}
+          {step === 0 && <GoalStep foundation={foundation} />}
           {step === 1 && <DraftStep topic={topic} />}
           {step === 2 && topic && <ShapeStep topic={topic} onContinue={() => setStep(3)} />}
           {step === 3 && topic && <ConfirmStep topic={topic} onBack={() => setStep(2)} />}
@@ -101,9 +101,22 @@ export function Setup({ topicId }: { topicId?: string }) {
 const FIELD =
   "w-full rounded-md border border-hairline-strong bg-canvas px-3 py-2 text-sm text-ink outline-none placeholder:text-ink-4 focus:ring-2 focus:ring-accent/40";
 
-function GoalStep() {
+// Starting a topic: its name and goal. From a suggested foundation, both
+// come prefilled and the goal is there to be made the learner's own.
+function GoalStep({ foundation }: { foundation?: string }) {
   const [title, setTitle] = useState("");
   const [goal, setGoal] = useState("");
+  const [forTitle, setForTitle] = useState<string | null>(null);
+  useEffect(() => {
+    if (!foundation) return;
+    call({ type: "foundation_prefill", suggestion_id: foundation })
+      .then((p) => {
+        setTitle(p.title);
+        setGoal(p.goal);
+        setForTitle(p.for_title);
+      })
+      .catch((e: Error) => setError(e.message));
+  }, [foundation]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const first = useRef<HTMLInputElement>(null);
@@ -117,7 +130,7 @@ function GoalStep() {
     setBusy(true);
     setError(null);
     try {
-      const topic = await call({ type: "start_topic", title, goal });
+      const topic = await call({ type: "start_topic", title, goal, foundation });
       window.location.hash = `#/setup/${encodeURIComponent(topic.id)}`;
     } catch (err) {
       setError((err as Error).message);
@@ -138,6 +151,14 @@ function GoalStep() {
           <X size={15} aria-hidden />
         </a>
       </div>
+      <AnimatePresence>
+        {forTitle && (
+          <motion.p key="for" variants={rise} {...presence} className="text-sm text-ink-3">
+            A foundation for <span className="text-ink-2">{forTitle}</span>. It's set up in its own terms, so it holds
+            beyond {forTitle}. Make the goal yours: what do you want to be able to do with it?
+          </motion.p>
+        )}
+      </AnimatePresence>
       <label className="flex flex-col gap-1.5 text-xs text-ink-3">
         Name it
         <input

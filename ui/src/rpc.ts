@@ -48,6 +48,7 @@ const REPLY = {
   get_ground: "ground",
   answer_ground: "ground",
   resolve_foundation: "topic",
+  foundation_prefill: "prefill",
   get_map: "map",
   resolve_flag: "topic",
   save_note: "note",

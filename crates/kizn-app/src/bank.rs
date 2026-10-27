@@ -44,6 +44,7 @@ Rules for every scored item (recall, apply, target):
 - Scenarios (apply, target) use concrete details; numbers and names are made up and the stem says so.
 - \"source\": what you took it from, or \"\" with \"model_knowledge\": true.
 - Don't reuse or lightly reword the stems listed as existing.
+- If \"supports\" lists topics, this topic is a foundation for them: set the items in varied situations, so the ideas hold beyond any one product. One of the supported topics may be the setting of at most one item in four.
 
 Reply with JSON only:
 {\"items\": [{\"concepts\": [\"<concept>\", ...], \"tier\": \"<bloom tier>\", \"stem\": \"...\", \"options\": [{\"text\": \"...\", \"correct\": true, \"why\": \"...\"}, {\"text\": \"...\", \"correct\": false, \"why\": \"...\", \"misconception\": \"...\", \"foundation\": \"none\"}], \"source\": \"\", \"model_knowledge\": true}]}
@@ -319,6 +320,7 @@ impl Ctx {
                 "slot_concept": slot_concept.map(|c| c.statement.as_str()),
                 "existing_stems": existing.iter().map(|(s, _)| s.as_str()).collect::<Vec<_>>(),
                 "topics": all_topics.iter().map(|t| t.title.as_str()).collect::<Vec<_>>(),
+                "supports": self.supports(&topic.id).unwrap_or_default(),
                 "resources": resources,
             })
         );

@@ -84,6 +84,8 @@ pub struct FakeServer {
     keys: Arc<Mutex<HashMap<String, String>>>,
     /// Varies what it writes, so stems don't repeat.
     written: Arc<std::sync::atomic::AtomicUsize>,
+    /// The last input each kizn task was sent, for tests to look at.
+    inputs: Arc<Mutex<HashMap<String, Value>>>,
 }
 
 impl FakeServer {
@@ -465,7 +467,13 @@ impl FakeServer {
         self.written.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     }
 
+    /// The last input a kizn task ("draft-outcomes", …) was sent, if any.
+    pub fn last_input(&self, task: &str) -> Option<Value> {
+        self.inputs.lock().unwrap().get(task).cloned()
+    }
+
     fn answer(&self, task: String, input: &Value, b: Behaviour) -> Option<Value> {
+        self.inputs.lock().unwrap().insert(task.clone(), input.clone());
         let s = |k: &str| input[k].as_str().unwrap_or("").to_string();
         match task.as_str() {
             "draft-outcomes" => {

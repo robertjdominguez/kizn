@@ -465,12 +465,9 @@ function Selected({ n, map, onClose }: { n: Placed; map: MapData | null; onClose
   const title = (id: string) => map?.nodes.find((x) => x.id === id)?.title ?? "";
   const restsOn = edges.filter((e) => e.upper === n.id).map((e) => title(e.lower));
   const supports = edges.filter((e) => e.lower === n.id).map((e) => title(e.upper));
+  // Opens setup, prefilled, for the learner to make it theirs.
   const start = () => {
-    call({ type: "resolve_foundation", suggestion_id: n.id, action: "start" })
-      .then((t) => {
-        window.location.hash = `#/setup/${encodeURIComponent(t.id)}`;
-      })
-      .catch(() => undefined);
+    window.location.hash = `#/new-topic?foundation=${encodeURIComponent(n.id)}`;
   };
   // Below it (what it rests on) and above it (what it supports), as arrows.
   const linked = (Icon: typeof ArrowDown, label: string, titles: string[]) =>

@@ -12,7 +12,7 @@ use kizn_model::{Client, JsonMode};
 use kizn_store::{ConceptRow, OutcomeRow, TopicRow};
 use serde_json::{Value, json};
 
-use crate::command::{ConceptView, DraftInput, OutcomeView, Role, SlotView, TopicSummary, TopicView};
+use crate::command::{ConceptView, DraftInput, OutcomeView, PrefillView, Role, SlotView, TopicSummary, TopicView};
 use crate::config::Config;
 use crate::{App, AppError, Ctx, Event};
 
@@ -26,11 +26,14 @@ Write 3 to 5 outcomes:
 - \"tier\": the revised-Bloom tier the goal asks for: remember, understand, apply, analyze, evaluate or create. Set it from what the goal demands (\"explain to customers\" is understand or analyze; \"advise\", \"defend\", \"be the expert\" is evaluate; \"design\" is create), never from what they know now.
 - \"reason\": one line that quotes the words of their goal that set the tier.
 
+If \"supports\" lists topics, this topic is a foundation the learner will build those on. Write the outcomes in this topic's own terms, so they hold wherever it applies: don't name the supported topics, or their products and vendors, in the outcomes. The goal may mention them as the reason for learning this; that's context, not the frame.
+
 Reply with JSON only: {\"outcomes\": [{\"statement\": \"...\", \"tier\": \"...\", \"reason\": \"...\"}]}";
 
 const DRAFT_CONCEPTS: &str = "kizn-task: draft-concepts
 List the concepts a learner needs to know to reach one outcome: 3 to 7 of them.
 Each is one short statement of an idea or fact, as you'd want it understood (\"An image is immutable layers plus config\"), not a topic heading (\"Images\"). Only what this outcome needs; the other outcomes are listed so you don't repeat them.
+If \"supports\" lists topics, this topic is a foundation for them: state the concepts generally, without naming those topics or their products.
 
 Reply with JSON only: {\"concepts\": [\"...\", \"...\"]}";
 
@@ -99,6 +102,17 @@ impl Ctx {
         new_id(self.deps.clock.as_ref(), self.deps.rng.as_ref())
     }
 
+    /// The topics this one is a foundation for (it's linked underneath them).
+    pub(crate) fn supports(&self, topic_id: &str) -> Result<Vec<String>, AppError> {
+        let mut titles = vec![];
+        for l in self.store.links()?.into_iter().filter(|l| l.lower_id == topic_id && l.kind == "rests_on") {
+            if let Some(t) = self.store.topic(&l.upper_id)? {
+                titles.push(t.title);
+            }
+        }
+        Ok(titles)
+    }
+
     pub(crate) fn changed(&self, topic_id: &str) {
         let _ = self.events.send(Event::TopicChanged { topic_id: topic_id.to_string() });
     }
@@ -131,7 +145,8 @@ async fn draft_inner(ctx: &Ctx, topic: &TopicRow, stop: &AtomicBool) -> Result<(
         ctx.changed(&topic.id);
         let others: Vec<&str> = outcomes.iter().filter(|x| x.id != o.id).map(|x| x.statement.as_str()).collect();
         let ask = input(&json!({
-            "title": topic.title, "goal": topic.goal, "outcome": o.statement, "tier": o.target_tier, "other_outcomes": others
+            "title": topic.title, "goal": topic.goal, "outcome": o.statement, "tier": o.target_tier, "other_outcomes": others,
+            "supports": ctx.supports(&topic.id)?,
         }));
         let reply = author.client.complete_json(DRAFT_CONCEPTS, &ask, &concepts_schema(), author.mode).await;
         let (reply, _) = match reply {
@@ -168,7 +183,7 @@ async fn draft_inner(ctx: &Ctx, topic: &TopicRow, stop: &AtomicBool) -> Result<(
 }
 
 async fn draft_outcomes(ctx: &Ctx, topic: &TopicRow, author: &RoleModel) -> Result<Vec<OutcomeRow>, AppError> {
-    let ask = input(&json!({"title": topic.title, "goal": topic.goal}));
+    let ask = input(&json!({"title": topic.title, "goal": topic.goal, "supports": ctx.supports(&topic.id)?}));
     let (reply, _) = author
         .client
         .complete_json(DRAFT_OUTCOMES, &ask, &outcomes_schema(), author.mode)
@@ -207,30 +222,11 @@ async fn draft_outcomes(ctx: &Ctx, topic: &TopicRow, author: &RoleModel) -> Resu
 // ---- commands ------------------------------------------------------------------------
 
 impl App {
-    /// Resolves a foundation: "start" sets up a new topic underneath (linked
-    /// as a foundation, drafting under way) and returns it; "later" and
-    /// "dismiss" return the topic it was for.
+    /// Resolves a foundation: "later" (a suggestion on the map) or "dismiss";
+    /// returns the topic it was for.
     pub(crate) fn resolve_foundation(&self, suggestion_id: &str, action: &str) -> Result<crate::Reply, AppError> {
-        let s = self
-            .store
-            .suggestions(None)?
-            .into_iter()
-            .find(|s| s.id == suggestion_id)
-            .ok_or_else(|| AppError::Refused("there's no such suggestion".into()))?;
+        let s = self.suggestion(suggestion_id)?;
         match action {
-            "start" => {
-                let for_topic =
-                    self.store.topic(&s.for_topic)?.ok_or_else(|| AppError::Refused("its topic is gone".into()))?;
-                let goal = match &s.why {
-                    Some(why) => format!("the foundations for {}: {why}", for_topic.title),
-                    None => format!("the foundations for {}", for_topic.title),
-                };
-                let started = self.start_topic(&s.title, &goal)?;
-                self.link_topics(&s.for_topic, &started.id, "rests_on")?;
-                self.store.set_suggestion(&s.id, "started", Some(&started.id))?;
-                self.ctx.changed(&s.for_topic);
-                self.topic_view(&started.id).map(crate::Reply::Topic)
-            }
             "later" | "dismiss" => {
                 let topic_id = self.set_aside_foundation(&s.id, action == "dismiss")?;
                 self.topic_view(&topic_id).map(crate::Reply::Topic)
@@ -239,7 +235,29 @@ impl App {
         }
     }
 
-    pub(crate) fn start_topic(&self, title: &str, goal: &str) -> Result<TopicView, AppError> {
+    fn suggestion(&self, suggestion_id: &str) -> Result<kizn_store::SuggestionRow, AppError> {
+        self.store
+            .suggestions(None)?
+            .into_iter()
+            .find(|s| s.id == suggestion_id)
+            .ok_or_else(|| AppError::Refused("there's no such suggestion".into()))
+    }
+
+    /// A suggested foundation's name and a goal for the learner to make their
+    /// own: why it matters for the topic it was suggested for, as a starting
+    /// point (drafting takes the goal as theirs).
+    pub(crate) fn foundation_prefill(&self, suggestion_id: &str) -> Result<PrefillView, AppError> {
+        let s = self.suggestion(suggestion_id)?;
+        let for_topic = self.store.topic(&s.for_topic)?.ok_or_else(|| AppError::Refused("its topic is gone".into()))?;
+        Ok(PrefillView {
+            suggestion_id: s.id,
+            goal: format!("Get a solid grounding in {}, so {} is easier to build on.", s.title, for_topic.title),
+            title: s.title,
+            for_title: for_topic.title,
+        })
+    }
+
+    pub(crate) fn start_topic(&self, title: &str, goal: &str, foundation: Option<&str>) -> Result<TopicView, AppError> {
         let (title, goal) = (title.trim(), goal.trim());
         if title.is_empty() {
             return Err(AppError::Refused("a topic needs a name".into()));
@@ -252,7 +270,15 @@ impl App {
         // Fail now, in words, rather than in the background.
         self.ctx.role_model(Role::Author)?;
         let id = self.ctx.id();
+        let suggestion = foundation.map(|f| self.suggestion(f)).transpose()?;
         self.store.create_draft_topic(&id, title, goal, &self.ctx.now())?;
+        // A foundation goes underneath its topic before drafting starts, so
+        // the draft knows what it supports (and keeps to its own terms).
+        if let Some(s) = suggestion {
+            self.link_topics(&s.for_topic, &id, "rests_on")?;
+            self.store.set_suggestion(&s.id, "started", Some(&id))?;
+            self.ctx.changed(&s.for_topic);
+        }
         let topic = self.store.topic(&id)?.expect("just created");
         let stop = Arc::new(AtomicBool::new(false));
         self.drafting.lock().unwrap().insert(id.clone(), stop.clone());

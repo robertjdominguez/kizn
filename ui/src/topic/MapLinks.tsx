@@ -42,12 +42,13 @@ export function MapLinks({ topic: t }: { topic: TopicView }) {
   // Foundations set aside for later (from the check or a flag): dashed
   // suggestions, to start or dismiss.
   const suggested = t.foundations.filter((f) => f.status === "later" && !f.topic_id);
+  // Starting one opens setup, prefilled, for the learner to make it theirs.
   const resolve = (id: string, action: "start" | "dismiss") => {
-    call({ type: "resolve_foundation", suggestion_id: id, action })
-      .then((started) => {
-        if (action === "start") window.location.hash = `#/setup/${encodeURIComponent(started.id)}`;
-      })
-      .catch((e: Error) => setError(e.message));
+    if (action === "start") {
+      window.location.hash = `#/new-topic?foundation=${encodeURIComponent(id)}`;
+      return;
+    }
+    call({ type: "resolve_foundation", suggestion_id: id, action }).catch((e: Error) => setError(e.message));
   };
 
   const groups: [string, LinkedTopic[]][] = [

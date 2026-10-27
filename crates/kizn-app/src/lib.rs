@@ -31,9 +31,9 @@ pub use command::{
     Anchor, AnswerView, AppError, AppInfo, BlockView, CardView, CheckView, Command, ConceptChange, ConceptLine,
     ConceptPageView, ConceptProgress, ConceptView, CueView, DayView, DeckView, DisputeView, DraftInput, DraftOutcome,
     Event, FlagView, GroundFoundation, GroundQuestion, GroundView, KeyView, LinkedTopic, MapEdge, MapNode, MapView,
-    MessageView, NextStep, NoteView, OptionFeedback, OutcomeProgress, OutcomeStanding, OutcomeView, ProgressView,
-    ProviderView, ReadingItem, ReadingListView, Reply, ResourceView, Role, RolesView, SettingsView, SlotView,
-    SourceView, StateCounts, SuggestionView, SummaryView, ThreadSummary, ThreadView, TodayView, TopicSummary,
+    MessageView, NextStep, NoteView, OptionFeedback, OutcomeProgress, OutcomeStanding, OutcomeView, PrefillView,
+    ProgressView, ProviderView, ReadingItem, ReadingListView, Reply, ResourceView, Role, RolesView, SettingsView,
+    SlotView, SourceView, StateCounts, SuggestionView, SummaryView, ThreadSummary, ThreadView, TodayView, TopicSummary,
     TopicView,
 };
 pub use config::{CONFIG_FILE, Config};
@@ -186,7 +186,10 @@ impl App {
             Command::RemoveProvider { name } => self.remove_provider(&name).map(Reply::Settings),
             Command::TestProvider { name } => self.test_provider(&name).await.map(Reply::Settings),
             Command::AssignRole { role, provider } => self.assign_role(role, provider.as_deref()).map(Reply::Settings),
-            Command::StartTopic { title, goal } => self.start_topic(&title, &goal).map(Reply::Topic),
+            Command::StartTopic { title, goal, foundation } => {
+                self.start_topic(&title, &goal, foundation.as_deref()).map(Reply::Topic)
+            }
+            Command::FoundationPrefill { suggestion_id } => self.foundation_prefill(&suggestion_id).map(Reply::Prefill),
             Command::StopDrafting { topic_id } => self.stop_drafting(&topic_id).map(Reply::Topic),
             Command::ResumeDrafting { topic_id } => self.resume_drafting(&topic_id).map(Reply::Topic),
             Command::SaveDraft { topic_id, draft } => self.save_draft(&topic_id, &draft).map(Reply::Topic),

@@ -374,7 +374,7 @@ async fn configured_author(w: &mut Kizn) {
 #[when(expr = "I start a topic {string} with the goal {string}")]
 async fn start_topic(w: &mut Kizn, title: String, goal: String) {
     w.goal = Some(goal.clone());
-    w.topic_from(Command::StartTopic { title, goal }).await;
+    w.topic_from(Command::StartTopic { title, goal, foundation: None }).await;
     w.wait_for("the draft", |t| t.draft_state != "drafting").await;
 }
 
@@ -501,6 +501,7 @@ async fn drafting_failed(w: &mut Kizn) {
     w.topic_from(Command::StartTopic {
         title: "Container fundamentals".into(),
         goal: "explain to customers why deployments behave differently".into(),
+        foundation: None,
     })
     .await;
     let t = w.wait_for("the draft to fail", |t| t.draft_state != "drafting").await;
@@ -1945,21 +1946,48 @@ async fn on_map_to_start(w: &mut Kizn, shaky: String, solid: String) {
     assert!(!suggested(&solid), "{solid} is on the map, but it seems solid");
 }
 
-#[when(expr = "I start {string} from the check")]
+const OWN_GOAL: &str = "explain how processes and signals work on any machine I run";
+
+#[when(expr = "I start {string} from the check, with a goal of my own")]
 async fn start_from_check(w: &mut Kizn, title: String) {
     let g = w.ground().await;
     let id = g.foundations.iter().find(|f| f.title == title).unwrap().suggestion_id.clone();
     w.confirmed_topic_id = Some(w.topic_id());
-    match w.command(Command::ResolveFoundation { suggestion_id: id, action: "start".into() }).await {
+    // kizn offers a goal to edit; the learner puts it in their own words.
+    let prefill = match w.command(Command::FoundationPrefill { suggestion_id: id.clone() }).await {
+        Ok(Reply::Prefill(p)) => p,
+        other => panic!("expected a prefill, got {other:?}"),
+    };
+    assert_eq!(prefill.title, title);
+    assert!(prefill.goal.contains(&g.topic_title), "the offered goal says what it's for: {}", prefill.goal);
+    let start = Command::StartTopic { title, goal: OWN_GOAL.into(), foundation: Some(id) };
+    match w.command(start).await {
         Ok(Reply::Topic(t)) => w.started = Some(t),
         other => panic!("expected the new topic, got {other:?}"),
     }
 }
 
-#[then(expr = "a new topic {string} is being set up")]
+#[then(expr = "a new topic {string} is being set up, with my goal")]
 fn new_topic_set_up(w: &mut Kizn, title: String) {
     let t = w.started.as_ref().unwrap();
-    assert_eq!((t.title.as_str(), t.status.as_str()), (title.as_str(), "draft"));
+    assert_eq!((t.title.as_str(), t.status.as_str(), t.goal.as_str()), (title.as_str(), "draft", OWN_GOAL));
+}
+
+#[then("its draft is asked to keep to its own terms, as a foundation for the topic I confirmed")]
+async fn draft_knows_it_supports(w: &mut Kizn) {
+    let confirmed_id = w.confirmed_topic_id.clone().unwrap();
+    let confirmed = w.store().topic(&confirmed_id).unwrap().expect("the confirmed topic").title;
+    // The draft runs in the background: wait for it to ask.
+    for _ in 0..100 {
+        let asked = w.fake.last_input("draft-outcomes");
+        if let Some(supports) = asked.as_ref().and_then(|a| a["supports"].as_array())
+            && supports.iter().any(|s| s.as_str() == Some(confirmed.as_str()))
+        {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    panic!("the draft wasn't told it supports {confirmed:?}: {:?}", w.fake.last_input("draft-outcomes"));
 }
 
 #[then("the topic I confirmed rests on it")]

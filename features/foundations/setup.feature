@@ -30,8 +30,9 @@ Feature: Foundations at setup
     And "Linux processes" is on my map to start with, and "Union filesystems" isn't
 
   @domain
-  Scenario: Starting a shaky foundation
+  Scenario: Starting a shaky foundation, in my own words
     Given I confirmed a topic keeping 2 foundations
-    When I start "Linux processes" from the check
-    Then a new topic "Linux processes" is being set up
+    When I start "Linux processes" from the check, with a goal of my own
+    Then a new topic "Linux processes" is being set up, with my goal
     And the topic I confirmed rests on it
+    And its draft is asked to keep to its own terms, as a foundation for the topic I confirmed
