@@ -141,6 +141,7 @@ When("every outcome has items", async ({ world }) => {
 
 Then("I see the topic as ready", async ({ page }) => {
   const card = page.getByRole("link", { name: /Container fundamentals/ });
+  // Ready to start: the starting point can be practised (the rest of the
+  // bank goes on being written; the @domain step checks it fills).
   await expect(card).toContainText("Ready to start", { timeout: 90_000 });
-  await expect(card.getByRole("progressbar")).toHaveCount(0, { timeout: 90_000 });
 });

@@ -1695,8 +1695,26 @@ fn asked_again(w: &mut Kizn) {
     assert_eq!(c.sources.len(), 3, "{:#?}", c.sources);
 }
 
-#[tokio::main]
-async fn main() {
+// The scenarios run on a thread with a roomy stack: the world and its step
+// futures outgrow the 1 MB a Windows main thread gets.
+fn main() {
+    std::thread::Builder::new()
+        .name("scenarios".into())
+        .stack_size(32 * 1024 * 1024)
+        .spawn(|| {
+            tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .thread_stack_size(8 * 1024 * 1024)
+                .build()
+                .expect("a tokio runtime")
+                .block_on(run())
+        })
+        .expect("the scenarios thread")
+        .join()
+        .expect("the scenarios ran");
+}
+
+async fn run() {
     let features = concat!(env!("CARGO_MANIFEST_DIR"), "/../../features");
     let extra = std::env::var("KIZN_BDD_TAG").ok().filter(|t| !t.is_empty());
     let extra = extra.map(|t| t.trim_start_matches('@').to_string());
