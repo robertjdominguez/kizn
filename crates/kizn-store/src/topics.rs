@@ -78,6 +78,20 @@ pub struct AttemptRow {
     pub disputed_at: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceRow {
+    pub id: String,
+    pub concept_id: String,
+    pub url: String,
+    pub title: String,
+    pub why: Option<String>,
+    /// verified | rejected | failed
+    pub status: String,
+    pub reason: Option<String>,
+    pub words: Option<i64>,
+    pub checked_at: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct BatchCounts {
     pub asked: i64,
@@ -247,6 +261,15 @@ impl Store {
         Ok(())
     }
 
+    pub fn concept(&self, id: &str) -> Result<Option<ConceptRow>> {
+        let conn = self.conn.lock().unwrap();
+        Ok(conn
+            .query_row("SELECT id, outcome_id, ord, statement FROM concepts WHERE id = ?1", [id], |r| {
+                Ok(ConceptRow { id: r.get(0)?, outcome_id: r.get(1)?, ord: r.get(2)?, statement: r.get(3)? })
+            })
+            .optional()?)
+    }
+
     pub fn concepts(&self, outcome_id: &str) -> Result<Vec<ConceptRow>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt =
@@ -380,6 +403,52 @@ impl Store {
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    pub fn insert_source(&self, s: &SourceRow) -> Result<()> {
+        self.conn.lock().unwrap().execute(
+            "INSERT INTO sources (id, concept_id, url, title, why, status, reason, words, checked_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![s.id, s.concept_id, s.url, s.title, s.why, s.status, s.reason, s.words, s.checked_at],
+        )?;
+        Ok(())
+    }
+
+    /// A concept's sources, oldest first: every one checked, whatever came of it.
+    pub fn sources(&self, concept_id: &str) -> Result<Vec<SourceRow>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, concept_id, url, title, why, status, reason, words, checked_at FROM sources
+             WHERE concept_id = ?1 ORDER BY checked_at, rowid",
+        )?;
+        let rows = stmt.query_map([concept_id], |r| {
+            Ok(SourceRow {
+                id: r.get(0)?,
+                concept_id: r.get(1)?,
+                url: r.get(2)?,
+                title: r.get(3)?,
+                why: r.get(4)?,
+                status: r.get(5)?,
+                reason: r.get(6)?,
+                words: r.get(7)?,
+                checked_at: r.get(8)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    pub fn mark_studied(&self, concept_id: &str, at: &str) -> Result<()> {
+        self.conn.lock().unwrap().execute(
+            "INSERT INTO studied (concept_id, at) VALUES (?1, ?2) ON CONFLICT (concept_id) DO UPDATE SET at = ?2",
+            params![concept_id, at],
+        )?;
+        Ok(())
+    }
+
+    /// When a concept was marked studied, if it was.
+    pub fn studied_at(&self, concept_id: &str) -> Result<Option<String>> {
+        let conn = self.conn.lock().unwrap();
+        Ok(conn.query_row("SELECT at FROM studied WHERE concept_id = ?1", [concept_id], |r| r.get(0)).optional()?)
     }
 
     pub fn start_batch(&self, id: &str, outcome_id: &str, provider: &str, now: &str) -> Result<()> {
