@@ -49,6 +49,8 @@ struct Kizn {
     deltas: usize,
     /// Progress and answers before something that mustn't move them.
     progress_before: Option<String>,
+    resource: Option<kizn_app::ResourceView>,
+    added: Option<Result<kizn_app::ConceptPageView, String>>,
 }
 
 impl std::fmt::Debug for Kizn {
@@ -82,6 +84,8 @@ impl Kizn {
             threads: vec![],
             deltas: 0,
             progress_before: None,
+            resource: None,
+            added: None,
         }
     }
 
@@ -1034,8 +1038,9 @@ fn see_sources(w: &mut Kizn) {
     let c = w.concept.as_ref().unwrap();
     assert_eq!(c.finding, "found");
     let hosts: Vec<&str> = c.sources.iter().map(|s| s.host.as_str()).collect();
-    assert_eq!(hosts, ["docs.example.org", "blog.example.net"]);
+    assert_eq!(hosts, ["docs.example.org", "youtube.com", "blog.example.net"]);
     assert!(c.sources.iter().all(|s| s.words >= 150 && s.why.is_some()));
+    assert_eq!(c.sources.iter().map(|s| s.kind.as_str()).collect::<Vec<_>>(), ["page", "video", "page"]);
 }
 
 #[then("none it couldn't")]
@@ -1286,6 +1291,134 @@ async fn reopen_either(w: &mut Kizn) {
             other => panic!("expected a Thread, got {other:?}"),
         }
     }
+}
+
+// --- Read in kizn ------------------------------------------------------------------
+
+impl Kizn {
+    async fn open_resource(&mut self, kind: &str) -> kizn_app::ResourceView {
+        let id = self
+            .concept
+            .as_ref()
+            .expect("no concept open")
+            .sources
+            .iter()
+            .find(|s| s.kind == kind)
+            .unwrap_or_else(|| panic!("no {kind} offered"))
+            .id
+            .clone();
+        match self.command(Command::GetResource { source_id: id }).await {
+            Ok(Reply::Resource(r)) => {
+                self.resource = Some(r.clone());
+                r
+            }
+            other => panic!("expected a Resource, got {other:?}"),
+        }
+    }
+}
+
+#[given("a concept with a verified page")]
+async fn concept_with_page(w: &mut Kizn) {
+    missed_one(w).await;
+    open_concept(w).await;
+    assert!(w.concept.as_ref().unwrap().sources.iter().any(|s| s.kind == "page"));
+}
+
+#[when("I open it in kizn")]
+async fn open_in_kizn(w: &mut Kizn) {
+    w.open_resource("page").await;
+}
+
+#[then("I read its text with the concept on top")]
+fn read_text(w: &mut Kizn) {
+    let r = w.resource.as_ref().unwrap();
+    assert_eq!(r.concept, w.concept.as_ref().unwrap().statement);
+    assert!(r.blocks.iter().any(|b| b.kind == "h") && r.blocks.iter().filter(|b| b.kind == "p").count() >= 3);
+    assert!(r.cues.is_empty());
+}
+
+#[then("not the page's scripts or navigation")]
+fn no_scripts(w: &mut Kizn) {
+    let r = w.resource.as_ref().unwrap();
+    assert!(
+        r.blocks.iter().all(|b| !b.text.contains("analytics()") && !b.text.contains("Docs Guides Reference")),
+        "{:#?}",
+        r.blocks
+    );
+}
+
+#[when("kizn looks for resources for it")]
+async fn looks_for_resources(w: &mut Kizn) {
+    open_concept(w).await;
+}
+
+#[then("a video with captions is offered")]
+fn video_offered(w: &mut Kizn) {
+    let c = w.concept.as_ref().unwrap();
+    let v = c.sources.iter().find(|s| s.kind == "video").expect("no video offered");
+    assert!(v.url.contains("captioned-") && !v.automatic, "{v:?}");
+}
+
+#[then("opening it shows its transcript with timestamps")]
+async fn transcript_shown(w: &mut Kizn) {
+    let r = w.open_resource("video").await;
+    assert!(r.blocks.is_empty());
+    assert_eq!(r.cues.len(), 40);
+    assert!(r.cues.windows(2).all(|p| p[0].start < p[1].start));
+}
+
+#[then("the video without captions is recorded as having no transcript")]
+fn no_transcript(w: &mut Kizn) {
+    let concept_id = w.concept.as_ref().unwrap().concept_id.clone();
+    let rows = w.store().sources(&concept_id).unwrap();
+    let row = rows.iter().find(|r| r.url.contains("nocaptions-")).expect("the uncaptioned video wasn't checked");
+    assert_eq!(row.status, "rejected");
+    assert!(row.reason.as_deref().unwrap_or("").starts_with("no transcript"), "{row:?}");
+}
+
+#[when("I write a note while reading it")]
+async fn write_note(w: &mut Kizn) {
+    w.open_resource("page").await;
+    let concept_id = w.concept.as_ref().unwrap().concept_id.clone();
+    let r = w.command(Command::SaveNote { concept_id, text: "Layers are shared, so rebuilds are cheap.".into() }).await;
+    assert!(matches!(r, Ok(Reply::Note(_))), "{r:?}");
+}
+
+#[when("I come back to the concept later")]
+async fn come_back_later(w: &mut Kizn) {
+    // kizn closed and opened again.
+    w.app = None;
+    let concept_id = w.concept.as_ref().unwrap().concept_id.clone();
+    w.concept_from(Command::GetConcept { concept_id }).await;
+}
+
+#[then("the note is there")]
+fn note_there(w: &mut Kizn) {
+    assert_eq!(w.concept.as_ref().unwrap().note.as_deref(), Some("Layers are shared, so rebuilds are cheap."));
+}
+
+#[when(expr = "I add {string} to it")]
+async fn add_source(w: &mut Kizn, url: String) {
+    let concept_id = w.concept.as_ref().unwrap().concept_id.clone();
+    w.added = Some(match w.command(Command::AddSource { concept_id, url }).await {
+        Ok(Reply::Concept(c)) => Ok(c),
+        Err(AppError::Refused(why)) => Err(why),
+        other => panic!("unexpected {other:?}"),
+    });
+}
+
+#[then("kizn fetches it once and offers it")]
+fn added_offered(w: &mut Kizn) {
+    let c = w.added.clone().unwrap().expect("refused");
+    let own = c.sources.iter().find(|s| s.own).expect("not offered");
+    assert_eq!(own.host, "notes.example.com");
+    assert_eq!(own.kind, "page");
+}
+
+#[then("I'm told it couldn't be read, and why")]
+fn added_refused(w: &mut Kizn) {
+    let why = w.added.clone().unwrap().expect_err("it was offered");
+    assert!(why.contains("empty app shell"), "{why}");
 }
 
 #[tokio::main]

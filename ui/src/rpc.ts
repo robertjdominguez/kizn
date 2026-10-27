@@ -40,6 +40,9 @@ const REPLY = {
   ask: "thread",
   get_threads: "threads",
   get_thread: "thread",
+  get_resource: "resource",
+  save_note: "note",
+  add_source: "concept",
 } as const satisfies Record<Command["type"], Reply["type"]>;
 
 type ReplyData<T extends Reply["type"]> = Extract<Reply, { type: T }>["data"];

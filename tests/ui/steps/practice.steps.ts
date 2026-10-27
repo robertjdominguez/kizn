@@ -479,3 +479,76 @@ Then("I can reopen either", async ({ page }) => {
     await expect(tutor(page).getByLabel("The tutor's reply")).toContainText("You picked");
   }
 });
+
+// ---- read in kizn --------------------------------------------------------------------
+
+const sheet = (page: Page) => page.getByRole("dialog").filter({ hasText: "Learn this" });
+const reader = (page: Page) => page.getByRole("dialog", { name: "Reader" });
+
+Given("a concept with a verified page", async ({ page, world }) => {
+  await seedTopic(page);
+  await openPractice(page, world, `/#/practice/${TOPIC}`);
+  await skipIntro(page);
+  await answer(page, world as PracticeWorld, false);
+  await openMissed(page, world as PracticeWorld);
+  await expect(sheet(page).getByText("docs.example.org")).toBeVisible({ timeout: 15_000 });
+});
+
+When("I open it in kizn", async ({ page }) => {
+  await sheet(page)
+    .getByRole("button", { name: /docs\.example\.org/ })
+    .click();
+  await expect(reader(page)).toBeVisible();
+});
+
+Then("I read its text with the concept on top", async ({ page }) => {
+  await expect(reader(page)).toContainText("Reading for");
+  await expect(reader(page)).toContainText("An image is immutable layers plus config");
+  await expect(reader(page).getByRole("heading", { level: 2 }).first()).toBeVisible();
+});
+
+Then("not the page's scripts or navigation", async ({ page }) => {
+  await expect(reader(page)).not.toContainText("analytics()");
+  await expect(reader(page)).not.toContainText("Docs Guides Reference");
+});
+
+When("kizn looks for resources for it", async ({ page, world }) => {
+  await openMissed(page, world as PracticeWorld);
+  await expect(sheet(page).getByText("docs.example.org")).toBeVisible({ timeout: 15_000 });
+});
+
+Then("a video with captions is offered", async ({ page }) => {
+  await expect(sheet(page).getByRole("button", { name: /youtube\.com/ })).toBeVisible();
+  await expect(sheet(page).getByLabel("Video")).toBeVisible();
+});
+
+Then("opening it shows its transcript with timestamps", async ({ page }) => {
+  await sheet(page)
+    .getByRole("button", { name: /youtube\.com/ })
+    .click();
+  await expect(reader(page).getByRole("button", { name: "0:00" })).toBeVisible();
+  await expect(reader(page).getByRole("button", { name: "0:05" })).toBeVisible();
+  await expect(reader(page).getByRole("button", { name: "Watch on YouTube" })).toBeVisible();
+});
+
+When("I write a note while reading it", async ({ page }) => {
+  await sheet(page)
+    .getByRole("button", { name: /docs\.example\.org/ })
+    .click();
+  await reader(page).getByLabel("Your note").fill("Layers are shared, so rebuilds are cheap.");
+  await expect(reader(page).getByText("Saved")).toBeVisible();
+});
+
+When("I come back to the concept later", async ({ page }) => {
+  await reader(page).getByRole("button", { name: "Back" }).click();
+  await page.keyboard.press("Escape");
+  await page.goto(`/#/topic/${TOPIC}`);
+  await page.reload();
+  await page.getByRole("region", { name: "Learn these" }).getByRole("button").first().click();
+});
+
+Then("the note is there", async ({ page }) => {
+  await expect(sheet(page).getByRole("region", { name: "Your note" })).toContainText(
+    "Layers are shared, so rebuilds are cheap.",
+  );
+});

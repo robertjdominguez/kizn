@@ -6,23 +6,24 @@
 use std::time::Duration;
 
 use kizn_core::progress::ConceptState;
-use kizn_core::source::verify;
+use kizn_core::source::{Rejected, blocks, caption_track, check_text, transcript, verify, video_title, youtube_id};
 use kizn_store::SourceRow;
 use serde_json::{Value, json};
 
-use crate::command::{ConceptPageView, Role, SourceView};
+use crate::command::{BlockView, ConceptPageView, CueView, NoteView, ResourceView, Role, SourceView};
 use crate::practice::days_until;
 use crate::{AppError, Ctx};
 
-/// Verified sources offered per concept.
-pub const MAX_VERIFIED: usize = 2;
+/// Verified resources offered per concept.
+pub const MAX_VERIFIED: usize = 3;
 const FETCH_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_PAGE_BYTES: usize = 2 * 1024 * 1024;
 
 const SUGGEST_SOURCES: &str = "kizn-task: suggest-sources
-You suggest web pages an adult learner can read to learn one concept. kizn fetches every page you suggest and only offers the ones that load as readable text about the concept, so suggest pages you're confident exist at that exact URL.
-- Prefer official documentation, standards, and well-known references over blogs; no videos, no paywalled or login-only pages, no PDFs.
-- Up to 4 pages, each a different URL than those listed as tried.
+You suggest resources an adult learner can use to learn one concept: web pages to read, and YouTube videos to watch. kizn fetches every one and only offers those it can hold as text about the concept (a page's readable text, a video's captions), so suggest resources you're confident exist at that exact URL.
+- Pick the kind that suits the concept: a short demo video for how something behaves, official documentation or a well-known reference for definitions. Prefer official and well-known sources over blogs.
+- YouTube videos only if they have captions; no paywalled or login-only pages, no PDFs.
+- Up to 6, each a different URL than those listed as tried.
 - \"why\": one line on what the learner gets from it.
 Reply with JSON only: {\"sources\": [{\"url\": \"https://...\", \"title\": \"...\", \"why\": \"...\"}]}";
 
@@ -37,7 +38,209 @@ fn host(url: &str) -> String {
         .unwrap_or_default()
 }
 
+/// What came of checking a resource: whether it can be offered, and the text
+/// kizn keeps for reading it (a page's blocks, a video's transcript).
+pub(crate) struct Checked {
+    status: &'static str,
+    reason: Option<String>,
+    words: Option<i64>,
+    title: Option<String>,
+    kind: &'static str,
+    content: Option<String>,
+    automatic: bool,
+}
+
+impl Checked {
+    fn failed(kind: &'static str, why: String) -> Checked {
+        Checked { status: "failed", reason: Some(why), words: None, title: None, kind, content: None, automatic: false }
+    }
+
+    fn rejected(kind: &'static str, r: Rejected) -> Checked {
+        Checked {
+            status: "rejected",
+            reason: Some(r.to_string()),
+            words: None,
+            title: None,
+            kind,
+            content: None,
+            automatic: false,
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn row(
+        self,
+        id: String,
+        concept_id: &str,
+        url: &str,
+        title: Option<String>,
+        why: Option<&str>,
+        added_by: &str,
+        at: String,
+    ) -> SourceRow {
+        SourceRow {
+            id,
+            concept_id: concept_id.into(),
+            url: url.into(),
+            title: title.or(self.title).unwrap_or_else(|| host(url)),
+            why: why.map(str::to_string),
+            status: self.status.into(),
+            reason: self.reason,
+            words: self.words,
+            checked_at: at,
+            kind: self.kind.into(),
+            content_json: self.content,
+            automatic: self.automatic,
+            added_by: added_by.into(),
+        }
+    }
+}
+
+fn source_view(s: &SourceRow) -> SourceView {
+    SourceView {
+        id: s.id.clone(),
+        kind: s.kind.clone(),
+        url: s.url.clone(),
+        title: s.title.clone(),
+        why: s.why.clone(),
+        host: host(&s.url),
+        words: s.words.unwrap_or(0),
+        automatic: s.automatic,
+        own: s.added_by == "learner",
+    }
+}
+
 impl Ctx {
+    /// A resource for the reader. One checked before kizn kept its text is
+    /// fetched again now, and kept.
+    pub(crate) async fn resource(&self, source_id: &str) -> Result<ResourceView, AppError> {
+        let mut s =
+            self.store.source(source_id)?.ok_or_else(|| AppError::Refused("there's no such resource".into()))?;
+        if s.status != "verified" {
+            return Err(AppError::Refused("kizn couldn't read that one".into()));
+        }
+        let concept =
+            self.store.concept(&s.concept_id)?.ok_or_else(|| AppError::Refused("its concept is gone".into()))?;
+        let outcome =
+            self.store.outcome(&concept.outcome_id)?.ok_or_else(|| AppError::Refused("its outcome is gone".into()))?;
+        if s.content_json.is_none() {
+            let checked = self.check_resource(&s.url, &concept.statement).await;
+            match checked.content {
+                Some(content) => {
+                    self.store.set_source_content(&s.id, &content)?;
+                    s.content_json = Some(content);
+                }
+                None => {
+                    return Err(AppError::Refused(format!(
+                        "kizn couldn't read it again: {}",
+                        checked.reason.unwrap_or_default()
+                    )));
+                }
+            }
+        }
+        let content = s.content_json.as_deref().unwrap_or("[]");
+        let (blocks, cues) = if s.kind == "video" {
+            let cues: Vec<kizn_core::source::Cue> = serde_json::from_str(content).unwrap_or_default();
+            (vec![], cues.into_iter().map(|c| CueView { start: c.start, text: c.text }).collect())
+        } else {
+            let blocks: Vec<kizn_core::source::Block> = serde_json::from_str(content).unwrap_or_default();
+            (blocks.into_iter().map(|b| BlockView { kind: b.kind, text: b.text }).collect(), vec![])
+        };
+        Ok(ResourceView {
+            source: source_view(&s),
+            concept_id: concept.id.clone(),
+            concept: concept.statement,
+            topic_id: outcome.topic_id,
+            blocks,
+            cues,
+            note: self.store.note(&concept.id)?,
+        })
+    }
+
+    pub(crate) fn save_note(&self, concept_id: &str, text: &str) -> Result<NoteView, AppError> {
+        self.store.concept(concept_id)?.ok_or_else(|| AppError::Refused("there's no such concept".into()))?;
+        self.store.save_note(concept_id, text, &self.now())?;
+        Ok(NoteView { concept_id: concept_id.into(), text: text.trim().to_string() })
+    }
+
+    /// The learner's own resource: fetched once and checked like kizn's.
+    pub(crate) async fn add_source(&self, concept_id: &str, url: &str) -> Result<ConceptPageView, AppError> {
+        let url = url.trim();
+        if !(url.starts_with("https://") || url.starts_with("http://")) {
+            return Err(AppError::Refused(
+                "that doesn't look like a web address (it should start with https://)".into(),
+            ));
+        }
+        let concept =
+            self.store.concept(concept_id)?.ok_or_else(|| AppError::Refused("there's no such concept".into()))?;
+        if self.store.sources(concept_id)?.iter().any(|s| s.url == url && s.status == "verified") {
+            return Err(AppError::Refused("that one is already here".into()));
+        }
+        let checked = self.check_resource(url, &concept.statement).await;
+        let ok = checked.status == "verified";
+        let reason = checked.reason.clone();
+        self.store.insert_source(&checked.row(self.id(), concept_id, url, None, None, "learner", self.now()))?;
+        if !ok {
+            return Err(AppError::Refused(format!("kizn couldn't use it: {}", reason.unwrap_or_default())));
+        }
+        if let Ok(Some(o)) = self.store.outcome(&concept.outcome_id) {
+            self.changed(&o.topic_id);
+        }
+        self.concept_page(concept_id)
+    }
+
+    /// Fetches a resource once and checks it can be studied from and is
+    /// about the concept: a page's readable text, or a YouTube video's
+    /// transcript (no captions, not offered).
+    pub(crate) async fn check_resource(&self, url: &str, concept: &str) -> Checked {
+        let fetch = |u: String| async move { self.deps.http.fetch_page(&u, FETCH_TIMEOUT, MAX_PAGE_BYTES).await };
+        if youtube_id(url).is_some() {
+            let page = match fetch(url.to_string()).await {
+                Ok(p) if (200..300).contains(&p.status) => p,
+                Ok(p) => return Checked::rejected("video", Rejected::Status(p.status)),
+                Err(e) => return Checked::failed("video", format!("unreachable: {e}")),
+            };
+            let Some(track) = caption_track(&page.body) else {
+                return Checked::rejected("video", Rejected::NoTranscript);
+            };
+            let cues = match fetch(track.url.clone()).await {
+                Ok(t) if (200..300).contains(&t.status) => transcript(&t.body),
+                Ok(_) | Err(_) => vec![],
+            };
+            if cues.is_empty() {
+                return Checked::rejected("video", Rejected::NoTranscript);
+            }
+            let text = cues.iter().map(|c| c.text.as_str()).collect::<Vec<_>>().join(" ");
+            return match check_text(&text, concept) {
+                Err(r) => Checked::rejected("video", r),
+                Ok(words) => Checked {
+                    status: "verified",
+                    reason: None,
+                    words: Some(words as i64),
+                    title: video_title(&page.body),
+                    kind: "video",
+                    content: serde_json::to_string(&cues).ok(),
+                    automatic: track.automatic,
+                },
+            };
+        }
+        match fetch(url.to_string()).await {
+            Err(e) => Checked::failed("page", format!("unreachable: {e}")),
+            Ok(page) => match verify(page.status, &page.content_type, &page.body, concept) {
+                Err(r) => Checked::rejected("page", r),
+                Ok(v) => Checked {
+                    status: "verified",
+                    reason: None,
+                    words: Some(v.words as i64),
+                    title: v.title,
+                    kind: "page",
+                    content: serde_json::to_string(&blocks(&page.body)).ok(),
+                    automatic: false,
+                },
+            },
+        }
+    }
+
     pub(crate) fn concept_page(&self, concept_id: &str) -> Result<ConceptPageView, AppError> {
         let concept =
             self.store.concept(concept_id)?.ok_or_else(|| AppError::Refused("there's no such concept".into()))?;
@@ -50,17 +253,7 @@ impl Ctx {
             .topic(&outcome.topic_id)?
             .ok_or_else(|| AppError::Refused("that concept's topic is gone".into()))?;
         let rows = self.store.sources(concept_id)?;
-        let verified: Vec<SourceView> = rows
-            .iter()
-            .filter(|s| s.status == "verified")
-            .map(|s| SourceView {
-                url: s.url.clone(),
-                title: s.title.clone(),
-                why: s.why.clone(),
-                host: host(&s.url),
-                words: s.words.unwrap_or(0),
-            })
-            .collect();
+        let verified: Vec<SourceView> = rows.iter().filter(|s| s.status == "verified").map(source_view).collect();
         let finding = if self.sourcing.lock().unwrap().contains(concept_id) {
             "finding"
         } else if !verified.is_empty() {
@@ -84,6 +277,7 @@ impl Ctx {
             sources: verified,
             finding: finding.into(),
             checked: rows.iter().filter(|s| !s.url.is_empty()).count() as i64,
+            note: self.store.note(concept_id)?,
         })
     }
 
@@ -148,7 +342,7 @@ impl Ctx {
         }
         let tutor = self.role_model(Role::Tutor).or_else(|_| self.role_model(Role::Author))?;
         let ask = format!(
-            "Suggest up to 4 pages to learn this concept: \"{}\".\n\n<input>\n{}\n</input>",
+            "Suggest up to 6 resources to learn this concept: \"{}\".\n\n<input>\n{}\n</input>",
             concept.statement,
             json!({
                 "topic": topic.title, "goal": topic.goal, "outcome": outcome.statement, "concept": concept.statement,
@@ -169,12 +363,16 @@ impl Ctx {
                     reason: Some(format!("the tutor couldn't suggest any: {e}")),
                     words: None,
                     checked_at: self.now(),
+                    kind: "page".into(),
+                    content_json: None,
+                    automatic: false,
+                    added_by: "kizn".into(),
                 })?;
                 return Ok(());
             }
         };
         let candidates = reply["sources"].as_array().cloned().unwrap_or_default();
-        for c in candidates.iter().take(4) {
+        for c in candidates.iter().take(6) {
             if verified >= MAX_VERIFIED {
                 break;
             }
@@ -186,27 +384,20 @@ impl Ctx {
             if tried.iter().any(|t| t.url == url) {
                 continue;
             }
-            let fetched = self.deps.http.fetch_page(url, FETCH_TIMEOUT, MAX_PAGE_BYTES).await;
-            let (status, reason, words, page_title) = match fetched {
-                Err(e) => ("failed", Some(format!("unreachable: {e}")), None, None),
-                Ok(page) => match verify(page.status, &page.content_type, &page.body, &concept.statement) {
-                    Ok(v) => ("verified", None, Some(v.words as i64), v.title),
-                    Err(r) => ("rejected", Some(r.to_string()), None, None),
-                },
-            };
-            let title = c["title"].as_str().map(str::to_string).filter(|t| !t.trim().is_empty()).or(page_title);
-            self.store.insert_source(&SourceRow {
-                id: self.id(),
-                concept_id: concept_id.into(),
-                url: url.into(),
-                title: title.unwrap_or_else(|| host(url)),
-                why: c["why"].as_str().map(str::to_string),
-                status: status.into(),
-                reason,
-                words,
-                checked_at: self.now(),
-            })?;
-            if status == "verified" {
+            let checked = self.check_resource(url, &concept.statement).await;
+            let title =
+                c["title"].as_str().map(str::to_string).filter(|t| !t.trim().is_empty()).or(checked.title.clone());
+            let ok = checked.status == "verified";
+            self.store.insert_source(&checked.row(
+                self.id(),
+                concept_id,
+                url,
+                title,
+                c["why"].as_str(),
+                "kizn",
+                self.now(),
+            ))?;
+            if ok {
                 verified += 1;
             }
         }

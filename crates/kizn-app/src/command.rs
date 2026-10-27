@@ -104,6 +104,21 @@ pub enum Command {
     MarkStudied {
         concept_id: String,
     },
+    /// A resource to read in kizn: a page's text or a video's transcript.
+    GetResource {
+        source_id: String,
+    },
+    /// A concept's note (one per concept; empty removes it).
+    SaveNote {
+        concept_id: String,
+        text: String,
+    },
+    /// The learner's own resource for a concept: fetched and checked like
+    /// kizn's; refused with the reason when it can't be read.
+    AddSource {
+        concept_id: String,
+        url: String,
+    },
     /// "This key is wrong": the answer stops counting, the question is
     /// retired, and a replacement is written for its slot.
     Dispute {
@@ -162,6 +177,8 @@ pub enum Reply {
     Concept(ConceptPageView),
     Disputed(DisputeView),
     Thread(ThreadView),
+    Resource(ResourceView),
+    Note(NoteView),
     Threads(Vec<ThreadSummary>),
 }
 
@@ -197,11 +214,15 @@ pub struct ConceptPageView {
     /// How many suggested pages kizn has fetched for it, whatever came of it.
     #[ts(type = "number")]
     pub checked: i64,
+    pub note: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct SourceView {
+    pub id: String,
+    /// "page" or "video".
+    pub kind: String,
     pub url: String,
     pub title: String,
     pub why: Option<String>,
@@ -209,6 +230,48 @@ pub struct SourceView {
     pub host: String,
     #[ts(type = "number")]
     pub words: i64,
+    /// A video's captions were generated, not written by a person.
+    pub automatic: bool,
+    /// The learner added it.
+    pub own: bool,
+}
+
+/// A resource in kizn's reader: the concept it's for, and its text.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct ResourceView {
+    pub source: SourceView,
+    pub concept_id: String,
+    pub concept: String,
+    pub topic_id: String,
+    /// A page's text.
+    pub blocks: Vec<BlockView>,
+    /// A video's transcript.
+    pub cues: Vec<CueView>,
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct BlockView {
+    /// "h", "p", "li" or "pre".
+    pub kind: String,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct CueView {
+    /// Seconds into the video.
+    pub start: f64,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct NoteView {
+    pub concept_id: String,
+    pub text: String,
 }
 
 /// A practice set: cards with their options in the order to show them. No

@@ -139,6 +139,10 @@ async fn handle(
     if method == Method::GET && path.starts_with("/web/") {
         return web_page(path);
     }
+    // The fake YouTube: watch pages and their caption tracks (any host).
+    if method == Method::GET && (path == "/watch" || path == "/api/timedtext") {
+        return youtube(path, uri.query().unwrap_or(""));
+    }
     let (behaviour, rest) = match path.trim_start_matches('/').split_once('/') {
         Some((first, rest)) if Behaviour::from_name(first).is_some() => {
             (Behaviour::from_name(first).unwrap(), format!("/{rest}"))
@@ -214,6 +218,46 @@ fn web_page(path: &str) -> Response {
         ),
         _ => html(StatusCode::NOT_FOUND, "<html><body>Not found</body></html>".into()),
     }
+}
+
+/// A watch page (`v=captioned-…` has an English caption track, anything else
+/// none) and its caption track, about whatever the id's slug says.
+fn youtube(path: &str, query: &str) -> Response {
+    let v = query.split('&').find_map(|kv| kv.strip_prefix("v=")).unwrap_or("").to_string();
+    let about = v.split_once('-').map(|(_, slug)| slug.replace('-', " ")).unwrap_or_default();
+    let reply = |content_type: &str, body: String| {
+        Response::builder().header(header::CONTENT_TYPE, content_type).body(Body::from(body)).unwrap()
+    };
+    if path == "/api/timedtext" {
+        let lines = [
+            format!("today we look at {about}"),
+            format!("in short, {about}"),
+            "let's see it on a real system".to_string(),
+            format!("here's the common mix-up about {about}"),
+            "and here's how to check it yourself".to_string(),
+        ];
+        let cues: String = (0..40)
+            .map(|i| format!(r#"<text start="{}.0" dur="4.0">{}</text>"#, i * 5, lines[i % lines.len()]))
+            .collect();
+        return reply(
+            "text/xml; charset=utf-8",
+            format!(r#"<?xml version="1.0" encoding="utf-8" ?><transcript>{cues}</transcript>"#),
+        );
+    }
+    let captions = if v.starts_with("captioned-") {
+        format!(
+            r#""captions":{{"playerCaptionsTracklistRenderer":{{"captionTracks":[{{"baseUrl":"https://www.youtube.com/api/timedtext?v={v}&lang=en","languageCode":"en","name":{{"simpleText":"English"}}}}]}}}},"#
+        )
+    } else {
+        String::new()
+    };
+    reply(
+        "text/html; charset=utf-8",
+        format!(
+            r#"<!doctype html><html><head><title>{about} explained - YouTube</title></head><body><div id="player"></div>
+<script>var ytInitialPlayerResponse = {{{captions}"videoDetails":{{"videoId":"{v}","title":"{about} explained"}}}};</script></body></html>"#
+        ),
+    )
 }
 
 fn percent_decode(s: &str) -> String {
@@ -515,8 +559,9 @@ impl FakeServer {
                 Some(json!({ "text": text }))
             }
             "suggest-sources" => {
-                // Two real pages around a dead link and an app shell: kizn
-                // should offer the two real ones only.
+                // Two real pages and a captioned video, around a dead link,
+                // an app shell and a video without captions: kizn should
+                // offer the three it can read.
                 let concept = s("concept");
                 let slug: String = concept
                     .chars()
@@ -526,6 +571,8 @@ impl FakeServer {
                     {"url": format!("https://docs.example.org/web/article/{slug}"), "title": format!("{concept}: the guide"), "why": "The official explanation, with a worked example."},
                     {"url": "https://old.example.org/web/missing", "title": "Archived notes", "why": "Background reading."},
                     {"url": "https://learn.example.com/web/shell", "title": "Interactive course", "why": "A hands-on walkthrough."},
+                    {"url": format!("https://www.youtube.com/watch?v=nocaptions-{slug}"), "title": "A talk without captions", "why": "A conference talk."},
+                    {"url": format!("https://www.youtube.com/watch?v=captioned-{slug}"), "title": format!("{concept}, shown"), "why": "A short demo on a real system."},
                     {"url": format!("https://blog.example.net/web/article/{slug}"), "title": format!("Understanding {concept}"), "why": "A plain-language take on the common mix-ups."},
                 ]}))
             }
