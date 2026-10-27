@@ -5,7 +5,7 @@
 use kizn_core::graph::{Edge, layers, would_loop};
 use kizn_store::LinkRow;
 
-use crate::command::LinkedTopic;
+use crate::command::{LinkedTopic, MapEdge, MapNode, MapView};
 use crate::{AppError, Ctx};
 
 impl Ctx {
@@ -83,6 +83,67 @@ impl Ctx {
         let edges: Vec<Edge> = links.iter().map(|l| (l.upper_id.as_str(), l.lower_id.as_str())).collect();
         out.layer = layers(&[topic_id], &edges).get(topic_id).copied().unwrap_or(0) as i64;
         Ok(out)
+    }
+}
+
+impl crate::App {
+    /// The whole map: topics, the foundations suggested for them (later, or
+    /// kept and not yet a topic), and the links, each with its layer.
+    pub(crate) fn map_view(&self) -> Result<MapView, AppError> {
+        let topics = self.topic_summaries()?;
+        let suggestions: Vec<_> = self
+            .store
+            .suggestions(None)?
+            .into_iter()
+            .filter(|s| s.topic_id.is_none() && matches!(s.status.as_str(), "later" | "kept"))
+            .collect();
+        let mut edges: Vec<MapEdge> = self
+            .store
+            .links()?
+            .into_iter()
+            .map(|l| MapEdge { upper: l.upper_id, lower: l.lower_id, kind: l.kind, suggested: false })
+            .collect();
+        edges.extend(suggestions.iter().map(|s| MapEdge {
+            upper: s.for_topic.clone(),
+            lower: s.id.clone(),
+            kind: "rests_on".into(),
+            suggested: true,
+        }));
+        let ids: Vec<&str> =
+            topics.iter().map(|t| t.id.as_str()).chain(suggestions.iter().map(|s| s.id.as_str())).collect();
+        let pairs: Vec<Edge> = edges.iter().map(|e| (e.upper.as_str(), e.lower.as_str())).collect();
+        let layer = layers(&ids, &pairs);
+        let count = |states: &[String], s: &str| states.iter().filter(|x| x.as_str() == s).count() as i64;
+        let mut nodes: Vec<MapNode> = topics
+            .iter()
+            .map(|t| MapNode {
+                id: t.id.clone(),
+                title: t.title.clone(),
+                kind: "topic".into(),
+                status: t.status.clone(),
+                layer: layer.get(t.id.as_str()).copied().unwrap_or(0) as i64,
+                concepts: t.states.len() as i64,
+                retained: count(&t.states, "retained"),
+                recalled: count(&t.states, "recalled"),
+                seen: count(&t.states, "seen"),
+                why: None,
+                for_topic: None,
+            })
+            .collect();
+        nodes.extend(suggestions.iter().map(|s| MapNode {
+            id: s.id.clone(),
+            title: s.title.clone(),
+            kind: "suggestion".into(),
+            status: "suggested".into(),
+            layer: layer.get(s.id.as_str()).copied().unwrap_or(0) as i64,
+            concepts: 0,
+            retained: 0,
+            recalled: 0,
+            seen: 0,
+            why: s.why.clone(),
+            for_topic: Some(s.for_topic.clone()),
+        }));
+        Ok(MapView { nodes, edges })
     }
 }
 

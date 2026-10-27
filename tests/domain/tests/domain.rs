@@ -56,6 +56,9 @@ struct Kizn {
     reading: Option<kizn_app::ReadingListView>,
     topic_ids: std::collections::HashMap<String, String>,
     link_result: Option<Result<(), String>>,
+    confirmed_topic_id: Option<String>,
+    started: Option<TopicView>,
+    map: Option<kizn_app::MapView>,
 }
 
 impl std::fmt::Debug for Kizn {
@@ -95,6 +98,9 @@ impl Kizn {
             reading: None,
             topic_ids: Default::default(),
             link_result: None,
+            confirmed_topic_id: None,
+            started: None,
+            map: None,
         }
     }
 
@@ -1804,6 +1810,255 @@ async fn made_up_of(w: &mut Kizn, upper: String, part: String) {
     assert_eq!(t.parts.iter().map(|l| l.title.as_str()).collect::<Vec<_>>(), [part.as_str()]);
     let p = w.topic_named(&part).await;
     assert_eq!(p.part_of.iter().map(|l| l.title.as_str()).collect::<Vec<_>>(), [upper.as_str()]);
+}
+
+// --- Foundations at setup -------------------------------------------------------------
+
+impl Kizn {
+    async fn ground(&mut self) -> kizn_app::GroundView {
+        let topic_id = self.topic_id();
+        match self.command(Command::GetGround { topic_id }).await {
+            Ok(Reply::Ground(g)) => g,
+            other => panic!("expected Ground, got {other:?}"),
+        }
+    }
+
+    /// Answers a foundation's check questions: right for each `true`.
+    async fn answer_ground(&mut self, title: &str, right: &[bool]) {
+        let g = self.ground().await;
+        let f = g.foundations.iter().find(|f| f.title == title).unwrap_or_else(|| panic!("no foundation {title}"));
+        let store = self.store();
+        for (q, &r) in f.questions.iter().zip(right) {
+            let row = store.ground_items(&f.suggestion_id).unwrap().into_iter().find(|g| g.id == q.id).unwrap();
+            let opts: Vec<ItemOption> = serde_json::from_str(&row.options_json).unwrap();
+            let chosen = q.order.iter().position(|&i| opts[i as usize].correct == r).unwrap() as u32;
+            let res =
+                self.command(Command::AnswerGround { item_id: q.id.clone(), order: q.order.clone(), chosen }).await;
+            assert!(matches!(res, Ok(Reply::Ground(_))), "{res:?}");
+        }
+    }
+}
+
+#[then(expr = "the draft proposes {int} foundations, each with why it matters")]
+fn draft_proposes(w: &mut Kizn, n: usize) {
+    let f = &w.topic.as_ref().unwrap().foundations;
+    assert_eq!(f.len(), n, "{f:#?}");
+    assert!(f.iter().all(|f| f.why.is_some() && f.status == "kept" && f.source == "draft"));
+}
+
+#[when(expr = "I drop {string} while shaping it")]
+async fn drop_foundation(w: &mut Kizn, title: String) {
+    let id = w.topic.as_ref().unwrap().foundations.iter().find(|f| f.title == title).unwrap().id.clone();
+    w.topic_from(Command::KeepFoundation { suggestion_id: id, keep: false }).await;
+}
+
+#[then(expr = "{int} foundations are kept")]
+fn kept_count(w: &mut Kizn, n: usize) {
+    assert_eq!(w.topic.as_ref().unwrap().foundations.iter().filter(|f| f.status == "kept").count(), n);
+}
+
+#[given(expr = "a topic I already have called {string}")]
+fn topic_i_have(w: &mut Kizn, title: String) {
+    w.make_topic(&title);
+}
+
+#[when("I confirm it with its foundations")]
+async fn confirm_with_foundations(w: &mut Kizn) {
+    let topic_id = w.topic_id();
+    w.topic_from(Command::ConfirmTopic { topic_id }).await;
+}
+
+#[then(expr = "{string} rests on {string}, the topic I have")]
+async fn rests_on_mine(w: &mut Kizn, _upper: String, lower: String) {
+    let topic_id = w.topic_id();
+    let t = w.topic_from(Command::GetTopic { topic_id }).await;
+    let link = t.rests_on.iter().find(|l| l.title == lower).expect("not linked");
+    assert_eq!(link.topic_id, w.tid(&lower));
+    let g = w.ground().await;
+    assert!(g.foundations.iter().all(|f| f.title != lower), "a topic I have was checked");
+}
+
+#[given("I confirmed a topic keeping 2 foundations")]
+async fn confirmed_keeping_two(w: &mut Kizn) {
+    drafted_topic(w).await;
+    drop_foundation(w, "Networking basics".into()).await;
+    confirm_with_foundations(w).await;
+    for _ in 0..500 {
+        let g = w.ground().await;
+        if !g.writing && g.foundations.iter().all(|f| !f.questions.is_empty()) {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    panic!("the check questions were never written: {:#?}", w.ground().await);
+}
+
+#[then(expr = "there are {int} questions on each foundation to check")]
+async fn questions_each(w: &mut Kizn, n: usize) {
+    let g = w.ground().await;
+    assert_eq!(g.foundations.len(), 2);
+    assert!(g.foundations.iter().all(|f| f.questions.len() == n), "{g:#?}");
+}
+
+#[when(expr = "I answer the questions on {string} mostly right")]
+async fn ground_mostly_right(w: &mut Kizn, title: String) {
+    w.answer_ground(&title, &[true, true, false]).await;
+}
+
+#[when(expr = "I answer the questions on {string} mostly wrong")]
+async fn ground_mostly_wrong(w: &mut Kizn, title: String) {
+    w.answer_ground(&title, &[true, false, false]).await;
+}
+
+#[then(expr = "{string} seems solid and {string} might be shaky")]
+async fn solid_and_shaky(w: &mut Kizn, solid: String, shaky: String) {
+    let g = w.ground().await;
+    let result = |t: &str| g.foundations.iter().find(|f| f.title == t).and_then(|f| f.result.clone());
+    assert_eq!((result(&solid).as_deref(), result(&shaky).as_deref()), (Some("solid"), Some("shaky")));
+}
+
+#[when(expr = "I start {string} from the check")]
+async fn start_from_check(w: &mut Kizn, title: String) {
+    let g = w.ground().await;
+    let id = g.foundations.iter().find(|f| f.title == title).unwrap().suggestion_id.clone();
+    w.confirmed_topic_id = Some(w.topic_id());
+    match w.command(Command::ResolveFoundation { suggestion_id: id, action: "start".into() }).await {
+        Ok(Reply::Topic(t)) => w.started = Some(t),
+        other => panic!("expected the new topic, got {other:?}"),
+    }
+}
+
+#[then(expr = "a new topic {string} is being set up")]
+fn new_topic_set_up(w: &mut Kizn, title: String) {
+    let t = w.started.as_ref().unwrap();
+    assert_eq!((t.title.as_str(), t.status.as_str()), (title.as_str(), "draft"));
+}
+
+#[then("the topic I confirmed rests on it")]
+async fn confirmed_rests_on_started(w: &mut Kizn) {
+    let topic_id = w.confirmed_topic_id.clone().unwrap();
+    let started = w.started.as_ref().unwrap().id.clone();
+    let t = w.topic_from(Command::GetTopic { topic_id }).await;
+    assert!(t.rests_on.iter().any(|l| l.topic_id == started), "{:#?}", t.rests_on);
+}
+
+// --- Flags from answers ------------------------------------------------------------------
+
+#[given(expr = "I missed {int} questions that point at {string}")]
+async fn missed_pointing(w: &mut Kizn, n: usize, _title: String) {
+    practising(w).await;
+    for i in 0..n {
+        w.answer_card(i, false).await;
+    }
+}
+
+#[then(expr = "the topic and Today flag {string}")]
+async fn topic_and_today_flag(w: &mut Kizn, title: String) {
+    let topic_id = w.topic_id();
+    let t = w.topic_from(Command::GetTopic { topic_id }).await;
+    assert_eq!(
+        t.flags.iter().map(|f| (f.title.as_str(), f.kind.as_str(), f.misses)).collect::<Vec<_>>(),
+        [(title.as_str(), "new", 2)]
+    );
+    open_today(w).await;
+    assert!(w.today().flags.iter().any(|f| f.title == title));
+}
+
+#[when("I add it underneath")]
+async fn add_underneath(w: &mut Kizn) {
+    let f = w.topic.as_ref().unwrap().flags[0].clone();
+    w.topic_from(Command::ResolveFlag { for_topic: f.for_topic, title: f.title, action: "add".into() }).await;
+}
+
+#[then(expr = "the flag is gone and {string} is suggested on my map")]
+async fn flag_gone_suggested(w: &mut Kizn, title: String) {
+    assert!(w.topic.as_ref().unwrap().flags.is_empty());
+    let map = match w.command(Command::GetMap).await {
+        Ok(Reply::Map(m)) => m,
+        other => panic!("expected the map, got {other:?}"),
+    };
+    let node = map.nodes.iter().find(|n| n.title == title && n.kind == "suggestion").expect("not on the map");
+    assert!(map.edges.iter().any(|e| e.lower == node.id && e.suggested && e.upper == w.topic_id()));
+}
+
+#[when(expr = r#"I say "not now" to the flag"#)]
+async fn not_now(w: &mut Kizn) {
+    let topic_id = w.topic_id();
+    let t = w.topic_from(Command::GetTopic { topic_id }).await;
+    let f = t.flags[0].clone();
+    w.topic_from(Command::ResolveFlag { for_topic: f.for_topic, title: f.title, action: "dismiss".into() }).await;
+}
+
+#[then("the flag is gone, after a restart too")]
+async fn flag_gone_restart(w: &mut Kizn) {
+    assert!(w.topic.as_ref().unwrap().flags.is_empty());
+    w.app = None;
+    let topic_id = w.topic_id();
+    let t = w.topic_from(Command::GetTopic { topic_id }).await;
+    assert!(t.flags.is_empty(), "{:#?}", t.flags);
+}
+
+#[given(expr = "{string} is a topic my topic already rests on")]
+async fn already_rests_on(w: &mut Kizn, title: String) {
+    w.make_topic(&title);
+    let (upper_id, lower_id) = (w.topic_id(), w.tid(&title));
+    assert!(matches!(
+        w.command(Command::LinkTopics { upper_id, lower_id, kind: "rests_on".into() }).await,
+        Ok(Reply::Done)
+    ));
+}
+
+#[then("the flag says it's worth a review")]
+async fn flag_review(w: &mut Kizn) {
+    let topic_id = w.topic_id();
+    let t = w.topic_from(Command::GetTopic { topic_id }).await;
+    assert_eq!(t.flags.len(), 1);
+    assert_eq!(t.flags[0].kind, "review");
+}
+
+// --- The map ---------------------------------------------------------------------------------
+
+#[given(expr = "{string} is suggested under {string}")]
+fn suggested_under(w: &mut Kizn, title: String, upper: String) {
+    let for_topic = w.tid(&upper);
+    w.store()
+        .insert_suggestion(&kizn_store::SuggestionRow {
+            id: "01SUGGESTION00000000000001".into(),
+            for_topic,
+            title,
+            why: Some("services talk over ports".into()),
+            source: "flag".into(),
+            status: "later".into(),
+            topic_id: None,
+            created_at: "2026-10-25 09:00:00".into(),
+        })
+        .unwrap();
+}
+
+#[when("I open the map")]
+async fn open_map(w: &mut Kizn) {
+    w.map = Some(match w.command(Command::GetMap).await {
+        Ok(Reply::Map(m)) => m,
+        other => panic!("expected the map, got {other:?}"),
+    });
+}
+
+#[then(expr = "{string} is at the bottom and {string} at the top")]
+fn bottom_and_top(w: &mut Kizn, bottom: String, top: String) {
+    let m = w.map.as_ref().unwrap();
+    let layer = |t: &str| m.nodes.iter().find(|n| n.title == t).unwrap().layer;
+    let max = m.nodes.iter().map(|n| n.layer).max().unwrap();
+    assert_eq!((layer(&bottom), layer(&top)), (0, max));
+    assert_eq!(max, 2);
+}
+
+#[then(expr = "{string} is drawn as a suggestion under {string}")]
+fn drawn_suggestion(w: &mut Kizn, title: String, upper: String) {
+    let m = w.map.as_ref().unwrap();
+    let n = m.nodes.iter().find(|n| n.title == title).unwrap();
+    assert_eq!(n.kind, "suggestion");
+    let upper_id = w.tid(&upper);
+    assert!(m.edges.iter().any(|e| e.upper == upper_id && e.lower == n.id && e.suggested));
 }
 
 // The scenarios run on a thread with a roomy stack: the world and its step

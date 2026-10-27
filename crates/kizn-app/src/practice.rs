@@ -503,7 +503,10 @@ impl Ctx {
                 next_due_in_days: next.map(|d| days_until(d, now)),
             });
         }
-        if let Some(t) = g.topics.iter().find(|t| !practised.contains(t.id.as_str())) {
+        // Questions are being written for a topic not practised yet (one with
+        // outcomes: a topic only on the map has nothing to write).
+        let has_outcomes = |id: &str| g.outcomes.iter().any(|(o, _, _)| o.topic_id == id);
+        if let Some(t) = g.topics.iter().find(|t| !practised.contains(t.id.as_str()) && has_outcomes(&t.id)) {
             return Ok(NextStep::Preparing { topic_id: t.id.clone(), title: t.title.clone() });
         }
         Ok(NextStep::NothingDue { next_at: next.map(sql_time), next_due_in_days: next.map(|d| days_until(d, now)) })
