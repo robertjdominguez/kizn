@@ -11,9 +11,11 @@ use std::sync::Arc;
 use chrono::{TimeZone, Utc};
 use cucumber::{World, given, then, when};
 use kizn_app::{
-    App, AppDeps, AppError, AppInfo, CONFIG_FILE, Command, DraftInput, DraftOutcome, Event, MemorySecrets, Paths,
-    ProviderView, Reply, Role, Secrets, SettingsView, TodayView, TopicView,
+    AnswerView, App, AppDeps, AppError, AppInfo, CONFIG_FILE, Command, DeckView, DraftInput, DraftOutcome, Event,
+    MemorySecrets, NextStep, Paths, ProviderView, Reply, Role, Secrets, SettingsView, SummaryView, TodayView,
+    TopicView,
 };
+use kizn_core::bank::ItemOption;
 use kizn_core::{FakeClock, SeededRng};
 use kizn_model::fake::{Behaviour, FakeServer};
 use tokio::sync::broadcast;
@@ -35,6 +37,13 @@ struct Kizn {
     events: Option<broadcast::Receiver<Event>>,
     topic: Option<TopicView>,
     goal: Option<String>,
+    deck: Option<DeckView>,
+    answers: Vec<AnswerView>,
+    summary: Option<SummaryView>,
+    /// How long the practice commands took, end to end.
+    practice_took: std::time::Duration,
+    clock: Arc<FakeClock>,
+    concept: Option<kizn_app::ConceptPageView>,
 }
 
 impl std::fmt::Debug for Kizn {
@@ -58,6 +67,68 @@ impl Kizn {
             events: None,
             topic: None,
             goal: None,
+            deck: None,
+            answers: vec![],
+            summary: None,
+            practice_took: std::time::Duration::ZERO,
+            clock: Arc::new(FakeClock::at(Utc.with_ymd_and_hms(2026, 10, 25, 9, 0, 0).unwrap())),
+            concept: None,
+        }
+    }
+
+    /// Loads a fixture's seed.sql (tests/fixtures/<name>) into the open app's
+    /// database, and reads its topic.
+    async fn seed(&mut self, fixture: &str) {
+        self.ensure_open();
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../fixtures/").to_string() + fixture + "/seed.sql";
+        self.store().execute_batch(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let topic_id = self.store().all_topics().unwrap()[0].id.clone();
+        self.topic_from(Command::GetTopic { topic_id }).await;
+    }
+
+    async fn start_practice(&mut self) -> DeckView {
+        let topic_id = Some(self.topic_id());
+        let started = std::time::Instant::now();
+        let deck = match self.command(Command::StartPractice { topic_id }).await {
+            Ok(Reply::Deck(d)) => d,
+            other => panic!("expected a Deck, got {other:?}"),
+        };
+        self.practice_took += started.elapsed();
+        self.deck = Some(deck.clone());
+        deck
+    }
+
+    /// A card's stored options, read straight from the database (the deck
+    /// never carries the key).
+    fn stored_options(&self, item_id: &str) -> Vec<ItemOption> {
+        let item = self.store().item(item_id).unwrap().unwrap();
+        serde_json::from_str(item.options_json.as_deref().unwrap()).unwrap()
+    }
+
+    /// Answers the deck's card `n`, right or wrong.
+    async fn answer_card(&mut self, n: usize, right: bool) -> AnswerView {
+        let card = self.deck.as_ref().expect("not practising").cards.get(n).cloned();
+        let card = card.unwrap_or_else(|| panic!("the deck has no card {n}"));
+        let stored = self.stored_options(&card.item_id);
+        let chosen = card.order.iter().position(|&i| stored[i as usize].correct == right).unwrap() as u32;
+        let started = std::time::Instant::now();
+        let a = match self.command(Command::Answer { item_id: card.item_id, order: card.order, chosen }).await {
+            Ok(Reply::Answered(a)) => a,
+            other => panic!("expected an answer, got {other:?}"),
+        };
+        self.practice_took += started.elapsed();
+        self.answers.push(a.clone());
+        a
+    }
+
+    async fn read_summary(&mut self) -> SummaryView {
+        let attempt_ids = self.answers.iter().map(|a| a.attempt_id.clone()).collect();
+        match self.command(Command::GetSummary { attempt_ids }).await {
+            Ok(Reply::Summary(v)) => {
+                self.summary = Some(v.clone());
+                v
+            }
+            other => panic!("expected a Summary, got {other:?}"),
         }
     }
 
@@ -76,17 +147,18 @@ impl Kizn {
     }
 
     /// Re-reads the topic until `done` holds (background jobs move it on),
-    /// for up to 10 seconds.
+    /// for up to 60 seconds (generous: scenarios run side by side, and the
+    /// slow-model ones need the room on a loaded machine).
     async fn wait_for(&mut self, what: &str, done: impl Fn(&TopicView) -> bool) -> TopicView {
         let topic_id = self.topic_id();
-        for _ in 0..1500 {
+        for _ in 0..3000 {
             let t = self.topic_from(Command::GetTopic { topic_id: topic_id.clone() }).await;
             if done(&t) {
                 return t;
             }
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         }
-        panic!("waited 30s for {what}: {:#?}", self.topic);
+        panic!("waited 60s for {what}: {:#?}", self.topic);
     }
 
     /// The scenario's database, read directly: refused items aren't in any view.
@@ -175,10 +247,11 @@ impl Kizn {
         }
         if self.app.is_none() {
             let deps = AppDeps {
-                clock: Arc::new(FakeClock::at(Utc.with_ymd_and_hms(2026, 10, 25, 9, 0, 0).unwrap())),
+                clock: self.clock.clone(),
                 rng: Arc::new(SeededRng::from_seed(1)),
                 secrets: self.secrets.clone(),
                 http: self.fake.client(),
+                utc_offset: chrono::FixedOffset::east_opt(0).unwrap(),
             };
             self.app = Some(App::open(Paths::in_dir(self.dir()), deps).unwrap());
         }
@@ -521,11 +594,10 @@ async fn tried_again(w: &mut Kizn) {
     panic!("no new attempt within 5s of retrying");
 }
 
-// The UI owns the words: "writing items" is an outcome whose bank is
-// waiting its turn or being written.
-#[then(expr = "the topic page shows {string} on each outcome")]
-fn topic_page_shows(w: &mut Kizn, text: String) {
-    assert_eq!(text, "writing items", "no @domain meaning for {text:?}");
+// The UI owns the words: every outcome's bank is waiting its turn or being
+// written.
+#[then("the topic page says its questions are being written")]
+fn topic_page_writing(w: &mut Kizn) {
     for o in &w.topic.as_ref().expect("no topic").outcomes {
         assert!(["waiting", "writing"].contains(&o.bank_state.as_str()), "outcome {} is {}", o.ord, o.bank_state);
     }
@@ -674,6 +746,356 @@ async fn shows_without_restart(w: &mut Kizn) {
     assert!(matches!(ev, Ok(Ok(Event::ConfigChanged))), "no ConfigChanged event within 5s: {ev:?}");
     let v = w.settings_from(Command::GetSettings).await;
     assert!(v.providers.iter().any(|p| p.name == "handmade"), "Settings doesn't list the hand-added provider");
+}
+
+// --- First practice -----------------------------------------------------
+
+#[given("a topic whose bank has recall questions for 5 unseen concepts")]
+async fn topic_with_bank(w: &mut Kizn) {
+    w.seed("topic-with-bank").await;
+    let o = &w.topic.as_ref().unwrap().outcomes[0];
+    assert_eq!(o.concepts.len(), 5, "the fixture's first outcome has 5 concepts");
+}
+
+#[given("I'm practising a topic")]
+async fn practising(w: &mut Kizn) {
+    topic_with_bank(w).await;
+    w.start_practice().await;
+}
+
+#[when("I start practice")]
+async fn start_practice(w: &mut Kizn) {
+    w.start_practice().await;
+}
+
+#[then(expr = "I get {int} recall cards, one per concept")]
+fn recall_cards(w: &mut Kizn, n: usize) {
+    let deck = w.deck.as_ref().unwrap();
+    assert_eq!(deck.cards.len(), n, "{deck:#?}");
+    assert!(deck.first_set, "a topic never practised: its first set");
+    let concepts: std::collections::HashSet<&str> = deck.cards.iter().map(|c| c.concept.as_str()).collect();
+    assert_eq!(concepts.len(), n, "one card per concept");
+    assert!(deck.cards.iter().all(|c| c.reason == "new" && c.outcome_ord == 1));
+}
+
+#[then("the correct option's position varies between cards")]
+fn key_positions_vary(w: &mut Kizn) {
+    let positions: std::collections::HashSet<usize> = w
+        .deck
+        .as_ref()
+        .unwrap()
+        .cards
+        .iter()
+        .map(|c| {
+            let stored = w.stored_options(&c.item_id);
+            c.order.iter().position(|&i| stored[i as usize].correct).unwrap()
+        })
+        .collect();
+    assert!(positions.len() > 1, "every key in the same position: {positions:?}");
+}
+
+#[when("I tap a wrong option")]
+async fn tap_wrong(w: &mut Kizn) {
+    w.answer_card(0, false).await;
+}
+
+#[then("I see that it is wrong, every option's why, and the source")]
+fn see_wrong(w: &mut Kizn) {
+    let a = w.answers.last().unwrap();
+    assert!(!a.correct);
+    assert_ne!(a.picked, a.key);
+    assert!(a.options[a.key as usize].correct);
+    assert!(a.options.iter().all(|o| !o.why.is_empty()), "an option without its why");
+    assert!(a.options[a.picked as usize].misconception.is_some(), "the picked option's misconception");
+    assert!(a.source.is_some() || a.model_knowledge, "neither a source nor \"model knowledge\"");
+}
+
+#[then(expr = "the concept is {string}")]
+fn concept_is(w: &mut Kizn, state: String) {
+    let a = w.answers.last().unwrap();
+    assert_eq!(a.concepts.len(), 1);
+    assert_eq!((a.concepts[0].before.as_str(), a.concepts[0].after.as_str()), ("unseen", state.as_str()));
+}
+
+#[when("I finish the set")]
+async fn finish_set(w: &mut Kizn) {
+    let n = w.deck.as_ref().unwrap().cards.len();
+    for i in 0..n {
+        w.answer_card(i, i % 2 == 0).await;
+    }
+    w.read_summary().await;
+}
+
+#[then("I see what held, what slipped, the next due date")]
+fn summary_held_slipped(w: &mut Kizn) {
+    let s = w.summary.as_ref().unwrap();
+    assert_eq!((s.answered, s.correct), (5, 3));
+    assert_eq!((s.held.len(), s.slipped.len()), (3, 2));
+    assert!(s.held.iter().all(|c| c.state == "recalled") && s.slipped.iter().all(|c| c.state == "seen"));
+    // A miss comes back tomorrow.
+    assert_eq!(s.next_due.as_deref(), Some("2026-10-26 09:00:00"));
+}
+
+#[then("each outcome's count and what's next for it")]
+fn summary_outcomes(w: &mut Kizn) {
+    let s = w.summary.as_ref().unwrap();
+    assert_eq!(s.outcomes.len(), 1, "only the outcome practised");
+    let o = &s.outcomes[0];
+    assert_eq!((o.concepts, o.unseen, o.recalled, o.retained), (5, 0, 3, 0));
+    assert!(o.next_due.is_some());
+}
+
+#[then(expr = "the {int} I got right are under \"you know these\"")]
+fn know_these(w: &mut Kizn, n: usize) {
+    let s = w.summary.as_ref().unwrap();
+    assert_eq!(s.held.len(), n);
+    assert!(s.held.iter().all(|c| !c.concept_id.is_empty()));
+}
+
+#[then(expr = "the {int} I missed are under \"learn these first\"")]
+fn learn_these(w: &mut Kizn, n: usize) {
+    assert_eq!(w.summary.as_ref().unwrap().slipped.len(), n);
+}
+
+#[then("it's my starting point, with the next recall tomorrow")]
+fn starting_point_tomorrow(w: &mut Kizn) {
+    let s = w.summary.as_ref().unwrap();
+    assert!(s.first_set);
+    assert_eq!(s.next_due_in_days, Some(1));
+}
+
+#[when(expr = "I answer {int} cards and stop")]
+async fn answer_and_stop(w: &mut Kizn, n: usize) {
+    for i in 0..n {
+        w.answer_card(i, true).await;
+    }
+}
+
+#[then(expr = "those {int} answers count")]
+async fn answers_count(w: &mut Kizn, n: i64) {
+    let topic_id = w.topic_id();
+    match w.command(Command::GetProgress { topic_id }).await {
+        Ok(Reply::Progress(p)) => {
+            assert_eq!(p.attempts, n);
+            let recalled = p.outcomes[0].concepts.iter().filter(|c| c.state == "recalled").count() as i64;
+            assert_eq!(recalled, n);
+        }
+        other => panic!("expected Progress, got {other:?}"),
+    }
+}
+
+#[then(expr = "the summary covers the {int} cards I answered")]
+async fn summary_covers(w: &mut Kizn, n: i64) {
+    let s = w.read_summary().await;
+    assert_eq!(s.answered, n);
+    assert_eq!(s.held.len() as i64, n);
+}
+
+#[given("no model can be reached")]
+fn no_model_reachable(w: &mut Kizn) {
+    let path = w.dir().join(CONFIG_FILE);
+    let text = std::fs::read_to_string(&path).unwrap();
+    // Every provider's base_url at a closed port.
+    let unreachable: Vec<String> = text
+        .lines()
+        .map(|l| if l.starts_with("base_url") { "base_url = \"http://127.0.0.1:9/v1\"".into() } else { l.into() })
+        .collect();
+    std::fs::write(&path, unreachable.join("\n")).unwrap();
+}
+
+#[when("I start practice and answer every card")]
+async fn practise_everything(w: &mut Kizn) {
+    let n = w.start_practice().await.cards.len();
+    assert!(n > 0);
+    for i in 0..n {
+        w.answer_card(i, true).await;
+    }
+    w.read_summary().await;
+}
+
+#[then("nothing waited on a model")]
+fn nothing_waited(w: &mut Kizn) {
+    assert_eq!(w.summary.as_ref().unwrap().answered, w.deck.as_ref().unwrap().cards.len() as i64);
+    assert!(w.practice_took < std::time::Duration::from_secs(1), "practice took {:?}", w.practice_took);
+}
+
+#[given("an author model that takes a while for each task")]
+async fn slow_author(w: &mut Kizn) {
+    w.use_for(Role::Author, "slow", Behaviour::Slow, false).await;
+    w.use_for(Role::Checker, "slow", Behaviour::Slow, false).await;
+}
+
+#[when("I confirm a topic")]
+async fn confirm_a_topic(w: &mut Kizn) {
+    w.confirmed_topic().await;
+}
+
+#[then("practice is available once every concept on the first outcome has one question")]
+async fn practice_available_early(w: &mut Kizn) {
+    let t = w.wait_for("the first set to be ready", |t| t.can_practise).await;
+    let first = &t.outcomes[0];
+    let recall: Vec<_> = first.slots.iter().filter(|s| s.kind == "recall").collect();
+    assert!(recall.iter().all(|s| s.have >= 1), "a concept on outcome 1 without a question: {recall:#?}");
+    let deck = w.start_practice().await;
+    assert_eq!(deck.cards.len(), first.concepts.len().min(5));
+}
+
+#[then("the rest of the bank is still being written")]
+fn rest_still_writing(w: &mut Kizn) {
+    let t = w.topic.as_ref().unwrap();
+    assert!(t.active < t.expected / 2, "{} of {} written already", t.active, t.expected);
+    assert!(t.outcomes[1..].iter().all(|o| o.active == 0), "later outcomes were written before outcome 1's first set");
+}
+
+#[given("I finished my first set today")]
+async fn finished_first_set(w: &mut Kizn) {
+    practising(w).await;
+    let n = w.deck.as_ref().unwrap().cards.len();
+    for i in 0..n {
+        w.answer_card(i, true).await;
+    }
+}
+
+#[then("I see when my next recalls are due")]
+fn see_next_recalls(w: &mut Kizn) {
+    match &w.today().next {
+        NextStep::NothingDue { next_at, .. } => assert_eq!(next_at.as_deref(), Some("2026-10-28 09:00:00")),
+        other => panic!("expected nothing due until the next recalls, got {other:?}"),
+    }
+}
+
+// --- Learn what you missed ---------------------------------------------------
+
+impl Kizn {
+    async fn concept_from(&mut self, cmd: Command) -> kizn_app::ConceptPageView {
+        match self.command(cmd).await {
+            Ok(Reply::Concept(c)) => {
+                self.concept = Some(c.clone());
+                c
+            }
+            other => panic!("expected a Concept, got {other:?}"),
+        }
+    }
+
+    /// The concept missed on the first card.
+    fn missed_concept(&self) -> String {
+        let a = self.answers.first().expect("nothing answered");
+        assert!(!a.correct);
+        let item = self.store().item(&self.deck.as_ref().unwrap().cards[0].item_id).unwrap().unwrap();
+        item.concept_ids[0].clone()
+    }
+}
+
+#[given("I missed a concept in my starting point")]
+async fn missed_one(w: &mut Kizn) {
+    practising(w).await;
+    w.answer_card(0, false).await;
+}
+
+#[when("I open it")]
+async fn open_concept(w: &mut Kizn) {
+    let concept_id = w.missed_concept();
+    // kizn started looking when the answer was wrong; wait for it to finish.
+    for _ in 0..500 {
+        let c = w.concept_from(Command::GetConcept { concept_id: concept_id.clone() }).await;
+        if c.finding != "finding" {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    panic!("still looking for sources after 10s");
+}
+
+#[then("I see the sources kizn fetched and could read")]
+fn see_sources(w: &mut Kizn) {
+    let c = w.concept.as_ref().unwrap();
+    assert_eq!(c.finding, "found");
+    let hosts: Vec<&str> = c.sources.iter().map(|s| s.host.as_str()).collect();
+    assert_eq!(hosts, ["docs.example.org", "blog.example.net"]);
+    assert!(c.sources.iter().all(|s| s.words >= 150 && s.why.is_some()));
+}
+
+#[then("none it couldn't")]
+fn none_unverified(w: &mut Kizn) {
+    let c = w.concept.as_ref().unwrap();
+    assert!(c.sources.iter().all(|s| !s.url.contains("/web/shell") && !s.url.contains("/web/missing")));
+}
+
+#[then("the app shell and the dead link are recorded with their reasons")]
+fn rejected_recorded(w: &mut Kizn) {
+    let rows = w.store().sources(&w.missed_concept()).unwrap();
+    let reason =
+        |part: &str| rows.iter().find(|r| r.url.contains(part)).and_then(|r| r.reason.clone()).unwrap_or_default();
+    assert!(reason("/web/shell").starts_with("empty app shell"), "{rows:#?}");
+    assert!(reason("/web/missing").starts_with("unreachable: HTTP 404"), "{rows:#?}");
+}
+
+#[when("I open it and mark it studied")]
+async fn open_and_study(w: &mut Kizn) {
+    open_concept(w).await;
+    let concept_id = w.missed_concept();
+    let c = w.concept_from(Command::MarkStudied { concept_id }).await;
+    assert!(c.studied);
+}
+
+#[then("the summary shows it studied")]
+async fn summary_studied(w: &mut Kizn) {
+    let s = w.read_summary().await;
+    assert_eq!(s.slipped.len(), 1);
+    assert!(s.slipped[0].studied);
+}
+
+#[then("it still comes back as recall tomorrow")]
+fn back_tomorrow(w: &mut Kizn) {
+    let c = w.concept.as_ref().unwrap();
+    assert_eq!((c.state.as_str(), c.next_due_in_days), ("seen", Some(1)));
+}
+
+#[when("a day passes without studying it")]
+fn a_day_passes(w: &mut Kizn) {
+    w.clock.advance(chrono::Duration::days(1));
+}
+
+#[then("it's in the practice set anyway")]
+async fn in_set_anyway(w: &mut Kizn) {
+    let concept_id = w.missed_concept();
+    let statement = w.store().concept(&concept_id).unwrap().unwrap().statement;
+    let deck = w.start_practice().await;
+    assert!(deck.cards.iter().any(|c| c.reason == "due" && c.concept == statement), "{deck:#?}");
+}
+
+#[given("I answer the rest of the set right")]
+async fn rest_right(w: &mut Kizn) {
+    let n = w.deck.as_ref().unwrap().cards.len();
+    for i in 1..n {
+        w.answer_card(i, true).await;
+    }
+}
+
+#[when("I open Today after the set")]
+async fn today_after_set(w: &mut Kizn) {
+    open_today(w).await;
+}
+
+#[then(expr = "Today's next step is to read up on {int} concept")]
+fn today_read_up(w: &mut Kizn, n: i64) {
+    let missed = w.missed_concept();
+    match &w.today().next {
+        NextStep::Learn { count, concept_id, next_due_in_days } => {
+            assert_eq!((*count, concept_id.as_str(), *next_due_in_days), (n, missed.as_str(), Some(1)));
+        }
+        other => panic!("expected the reading, got {other:?}"),
+    }
+}
+
+#[then("this week shows today as practised")]
+fn week_practised(w: &mut Kizn) {
+    let t = w.today();
+    assert_eq!(t.week.len(), 7);
+    let today: Vec<_> = t.week.iter().filter(|d| d.today).collect();
+    assert_eq!(today.len(), 1);
+    assert!(today[0].practised && today[0].date == t.date);
+    assert!(t.week.iter().filter(|d| !d.today).all(|d| !d.practised));
 }
 
 #[tokio::main]

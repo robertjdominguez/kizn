@@ -395,6 +395,7 @@ mod tests {
             rng: Arc::new(SeededRng::from_seed(1)),
             secrets: Arc::new(MemorySecrets::default()),
             http: fake.client(),
+            utc_offset: chrono::FixedOffset::east_opt(0).unwrap(),
         };
         (App::open(Paths::in_dir(dir.path()), deps).unwrap(), fake, dir)
     }

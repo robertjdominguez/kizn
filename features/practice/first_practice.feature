@@ -27,6 +27,14 @@ Feature: First practice
     Then I see what held, what slipped, the next due date
     And each outcome's count and what's next for it
 
+  @domain @ui
+  Scenario: The summary splits what I know from what to learn
+    Given I'm practising a topic
+    When I finish the set
+    Then the 3 I got right are under "you know these"
+    And the 2 I missed are under "learn these first"
+    And it's my starting point, with the next recall tomorrow
+
   @domain
   Scenario: Stopping halfway keeps what I answered
     Given I'm practising a topic
@@ -37,12 +45,13 @@ Feature: First practice
   @domain
   Scenario: Practice never calls a model
     Given a topic whose bank has recall questions for 5 unseen concepts
-    And the author model can't be reached
+    And no model can be reached
     When I start practice and answer every card
     Then nothing waited on a model
 
   @domain
   Scenario: The first set is ready long before the whole bank
+    Given an author model that takes a while for each task
     When I confirm a topic
     Then practice is available once every concept on the first outcome has one question
     And the rest of the bank is still being written

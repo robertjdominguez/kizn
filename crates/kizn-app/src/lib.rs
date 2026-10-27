@@ -8,8 +8,10 @@ mod command;
 mod config;
 mod events;
 mod paths;
+mod practice;
 mod secrets;
 mod settings;
+mod study;
 mod topics;
 
 use std::collections::HashMap;
@@ -21,8 +23,10 @@ use kizn_store::Store;
 use tokio::sync::broadcast;
 
 pub use command::{
-    AppError, AppInfo, CheckView, Command, ConceptView, DraftInput, DraftOutcome, Event, KeyView, OutcomeView,
-    ProviderView, Reply, Role, RolesView, SettingsView, SlotView, TodayView, TopicSummary, TopicView,
+    AnswerView, AppError, AppInfo, CardView, CheckView, Command, ConceptChange, ConceptLine, ConceptPageView,
+    ConceptProgress, ConceptView, DayView, DeckView, DraftInput, DraftOutcome, Event, KeyView, NextStep,
+    OptionFeedback, OutcomeProgress, OutcomeStanding, OutcomeView, ProgressView, ProviderView, Reply, Role, RolesView,
+    SettingsView, SlotView, SourceView, StateCounts, SummaryView, TodayView, TopicSummary, TopicView,
 };
 pub use config::{CONFIG_FILE, Config};
 pub use kizn_model::Http;
@@ -40,6 +44,9 @@ pub struct AppDeps {
     pub rng: Arc<dyn Rng>,
     pub secrets: Arc<dyn Secrets>,
     pub http: Http,
+    /// The learner's offset from UTC: where their day starts and ends (the
+    /// daily caps, the week on Today). UTC in scenarios.
+    pub utc_offset: chrono::FixedOffset,
 }
 
 impl AppDeps {
@@ -50,6 +57,7 @@ impl AppDeps {
             rng: Arc::new(SeededRng::from_os()),
             secrets: Arc::new(OsKeychain),
             http: Http::real(),
+            utc_offset: *chrono::Local::now().offset(),
         }
     }
 }
@@ -61,6 +69,8 @@ pub struct Ctx {
     store: Arc<Store>,
     deps: AppDeps,
     events: broadcast::Sender<Event>,
+    /// Concepts whose sources are being looked for right now.
+    sourcing: Arc<Mutex<std::collections::HashSet<String>>>,
 }
 
 pub struct App {
@@ -96,7 +106,7 @@ impl App {
             .map_err(|e| eprintln!("kizn: not watching config.toml: {e}"))
             .ok();
         Ok(App {
-            ctx: Ctx { paths, store: Arc::new(store), deps, events },
+            ctx: Ctx { paths, store: Arc::new(store), deps, events, sourcing: Arc::default() },
             drafting: Mutex::new(HashMap::new()),
             bank_wake: Arc::new(tokio::sync::Notify::new()),
             bank_started: AtomicBool::new(false),
@@ -106,6 +116,12 @@ impl App {
 
     pub fn paths(&self) -> &Paths {
         &self.paths
+    }
+
+    /// Concept states and next recalls, read without starting background
+    /// work (for `just inspect progress`).
+    pub fn read_progress(&self, topic_id: &str) -> Result<ProgressView, AppError> {
+        self.ctx.progress(topic_id)
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<Event> {
@@ -119,7 +135,16 @@ impl App {
             Command::GetToday => {
                 let config = Config::load(&self.paths.config_dir)?;
                 let topics = self.topic_summaries()?;
-                Ok(Reply::Today(TodayView { topics, model_configured: config.model_configured() }))
+                let next = self.next_step()?;
+                let (date, week, counts) = self.week()?;
+                Ok(Reply::Today(TodayView {
+                    topics,
+                    model_configured: config.model_configured(),
+                    next,
+                    date,
+                    week,
+                    counts,
+                }))
             }
             Command::GetAppInfo => Ok(Reply::AppInfo(AppInfo {
                 version: env!("CARGO_PKG_VERSION").to_string(),
@@ -144,6 +169,18 @@ impl App {
             Command::ConfirmTopic { topic_id } => self.confirm_topic(&topic_id).map(Reply::Topic),
             Command::GetTopic { topic_id } => self.topic_view(&topic_id).map(Reply::Topic),
             Command::RetryBank { outcome_id } => self.retry_bank(&outcome_id).map(Reply::Topic),
+            Command::StartPractice { topic_id } => self.start_practice(topic_id.as_deref()).map(Reply::Deck),
+            Command::Answer { item_id, order, chosen } => {
+                let reply = self.answer(&item_id, &order, chosen).map(Reply::Answered);
+                // Used-up questions get refilled.
+                self.wake_bank();
+                reply
+            }
+            Command::GetSummary { attempt_ids } => self.summary(&attempt_ids).map(Reply::Summary),
+            Command::GetProgress { topic_id } => self.progress(&topic_id).map(Reply::Progress),
+            Command::GetConcept { concept_id } => self.open_concept(&concept_id).map(Reply::Concept),
+            Command::FindSources { concept_id } => self.find_again(&concept_id).map(Reply::Concept),
+            Command::MarkStudied { concept_id } => self.mark_studied(&concept_id).map(Reply::Concept),
         }
     }
 }

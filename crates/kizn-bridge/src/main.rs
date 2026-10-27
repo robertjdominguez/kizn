@@ -94,6 +94,7 @@ fn paths() {
 fn inspect(what: Option<&str>, topic: Option<&str>) -> Result<(), String> {
     match what {
         Some("bank") => inspect_bank(topic),
+        Some("progress") => inspect_progress(topic),
         Some("db") => {
             let path = Paths::from_env().data_dir.join(kizn_app::DB_FILE);
             if !path.exists() {
@@ -107,8 +108,72 @@ fn inspect(what: Option<&str>, topic: Option<&str>) -> Result<(), String> {
             }
             Ok(())
         }
-        other => Err(format!("inspect what? {other:?}: db or bank (progress and attempts come with later phases)")),
+        other => Err(format!("inspect what? {other:?}: db, bank or progress")),
     }
+}
+
+/// Where the learner stands, worked out the way the app does: each
+/// concept's state and next recall per outcome, then the answers in order.
+fn inspect_progress(topic: Option<&str>) -> Result<(), String> {
+    let paths = Paths::from_env();
+    let path = paths.data_dir.join(kizn_app::DB_FILE);
+    if !path.exists() {
+        return Err(format!("no database at {} yet", path.display()));
+    }
+    let store = kizn_store::Store::open(&path).map_err(|e| e.to_string())?;
+    let topics: Vec<_> = store
+        .all_topics()
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .filter(|t| t.status == "confirmed")
+        .filter(|t| topic.is_none_or(|q| t.id.starts_with(q) || t.title.to_lowercase().contains(&q.to_lowercase())))
+        .collect();
+    if topics.is_empty() {
+        return Err(match topic {
+            Some(q) => format!("no confirmed topic matches {q:?}"),
+            None => "no confirmed topics yet".into(),
+        });
+    }
+    let app = App::open(paths, AppDeps::system()).map_err(|e| e.to_string())?;
+    for t in topics {
+        let p = app.read_progress(&t.id).map_err(|e| e.to_string())?;
+        println!("{}  ({}, {} answers)", t.title, t.id, p.attempts);
+        for o in &p.outcomes {
+            let s = &o.standing;
+            println!(
+                "  {}. {}\n     {} concepts · {} not started · {} recalled · {} stuck{}",
+                s.ord,
+                s.statement,
+                s.concepts,
+                s.unseen,
+                s.recalled,
+                s.retained,
+                s.next_due.as_deref().map(|d| format!(" · next recall {d}")).unwrap_or_default()
+            );
+            for c in &o.concepts {
+                let mark = match c.state.as_str() {
+                    "seen" => "◔",
+                    "recalled" => "◑",
+                    "retained" => "●",
+                    _ => "○",
+                };
+                let due = c.due.as_deref().map(|d| format!("  due {d}")).unwrap_or_default();
+                println!("       {mark} {:<9} {}{due}", c.state, c.statement);
+            }
+        }
+        let attempts = store.attempts(Some(&t.id)).map_err(|e| e.to_string())?;
+        if !attempts.is_empty() {
+            println!("  answers:");
+        }
+        for a in attempts {
+            let stem = store.item(&a.item_id).map_err(|e| e.to_string())?.map(|i| i.stem).unwrap_or_default();
+            let stem: String = stem.chars().take(70).collect();
+            let void = if a.disputed_at.is_some() { "  (disputed)" } else { "" };
+            println!("    {}  {}  {stem}{void}", a.at, if a.correct { "✓" } else { "✗" });
+        }
+        println!();
+    }
+    Ok(())
 }
 
 /// The bank as it stands: per outcome, active questions by kind against what
@@ -215,6 +280,12 @@ fn exit(msg: String) -> ! {
 async fn serve() {
     let mock = cfg!(feature = "test") || std::env::var("KIZN_MOCK").is_ok_and(|v| v == "1");
     let mut deps = AppDeps::system();
+    // `just dev days=N`: the clock runs N days ahead, to walk a week of practice.
+    let days: i64 = std::env::var("KIZN_DAYS_LATER").ok().and_then(|d| d.parse().ok()).unwrap_or(0);
+    if days != 0 {
+        deps.clock = Arc::new(kizn_core::ShiftedClock(chrono::Duration::days(days)));
+        eprintln!("kizn-bridge: the clock runs {days} days ahead (KIZN_DAYS_LATER)");
+    }
     if mock {
         let port = if cfg!(feature = "test") {
             0
