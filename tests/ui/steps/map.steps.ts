@@ -27,6 +27,11 @@ async function seedTopics(page: Page) {
 
 async function makeFoundation(page: Page, world: World, lower: string, upper: string) {
   await page.goto(`/#/topic/${encodeURIComponent(topicId(world, upper))}`);
+  // Moving between topics, the last page leaves before this one arrives:
+  // wait until only this topic's page is there, or the picker opens on the
+  // page that's leaving.
+  await expect(page.getByRole("heading", { level: 1, name: upper, exact: true })).toBeVisible();
+  await expect(onMap(page)).toHaveCount(1);
   await onMap(page).getByRole("button", { name: "Foundation" }).click();
   await onMap(page).getByRole("option", { name: lower, exact: true }).click();
 }
