@@ -7,6 +7,10 @@ mod bank;
 mod command;
 mod config;
 mod events;
+mod flags;
+mod foundations;
+mod ground;
+mod map;
 mod paths;
 mod practice;
 mod secrets;
@@ -26,9 +30,11 @@ use tokio::sync::broadcast;
 pub use command::{
     Anchor, AnswerView, AppError, AppInfo, BlockView, CardView, CheckView, Command, ConceptChange, ConceptLine,
     ConceptPageView, ConceptProgress, ConceptView, CueView, DayView, DeckView, DisputeView, DraftInput, DraftOutcome,
-    Event, KeyView, MessageView, NextStep, NoteView, OptionFeedback, OutcomeProgress, OutcomeStanding, OutcomeView,
-    ProgressView, ProviderView, ReadingItem, ReadingListView, Reply, ResourceView, Role, RolesView, SettingsView,
-    SlotView, SourceView, StateCounts, SummaryView, ThreadSummary, ThreadView, TodayView, TopicSummary, TopicView,
+    Event, FlagView, GroundFoundation, GroundQuestion, GroundView, KeyView, LinkedTopic, MapEdge, MapNode, MapView,
+    MessageView, NextStep, NoteView, OptionFeedback, OutcomeProgress, OutcomeStanding, OutcomeView, ProgressView,
+    ProviderView, ReadingItem, ReadingListView, Reply, ResourceView, Role, RolesView, SettingsView, SlotView,
+    SourceView, StateCounts, SuggestionView, SummaryView, ThreadSummary, ThreadView, TodayView, TopicSummary,
+    TopicView,
 };
 pub use config::{CONFIG_FILE, Config};
 pub use kizn_model::Http;
@@ -73,6 +79,8 @@ pub struct Ctx {
     events: broadcast::Sender<Event>,
     /// Concepts whose sources are being looked for right now.
     sourcing: Arc<Mutex<std::collections::HashSet<String>>>,
+    /// Topics whose ground-check questions are being written.
+    grounding: Arc<Mutex<std::collections::HashSet<String>>>,
     /// Conversations the tutor is answering right now, and the provider
     /// answering each (the bank writer waits for it on the same one).
     tutoring: Arc<Mutex<HashMap<String, String>>>,
@@ -120,6 +128,7 @@ impl App {
                 events,
                 sourcing: Arc::default(),
                 tutoring: Arc::default(),
+                grounding: Arc::default(),
             },
             drafting: Mutex::new(HashMap::new()),
             bank_wake: Arc::new(tokio::sync::Notify::new()),
@@ -158,6 +167,7 @@ impl App {
                     date,
                     week,
                     counts,
+                    flags: self.all_flags()?,
                 }))
             }
             Command::GetAppInfo => Ok(Reply::AppInfo(AppInfo {
@@ -195,6 +205,24 @@ impl App {
             Command::GetConcept { concept_id } => self.open_concept(&concept_id).map(Reply::Concept),
             Command::FindSources { concept_id } => self.find_again(&concept_id).map(Reply::Concept),
             Command::MarkStudied { concept_id } => self.mark_studied(&concept_id).map(Reply::Concept),
+            Command::LinkTopics { upper_id, lower_id, kind } => {
+                self.link_topics(&upper_id, &lower_id, &kind).map(|_| Reply::Done)
+            }
+            Command::Unlink { link_id } => self.unlink(&link_id).map(|_| Reply::Done),
+            Command::GetGround { topic_id } => self.ground_view(&topic_id).map(Reply::Ground),
+            Command::AnswerGround { item_id, order, chosen } => {
+                self.answer_ground(&item_id, &order, chosen).map(Reply::Ground)
+            }
+            Command::ResolveFoundation { suggestion_id, action } => self.resolve_foundation(&suggestion_id, &action),
+            Command::GetMap => self.map_view().map(Reply::Map),
+            Command::ResolveFlag { for_topic, title, action } => {
+                self.resolve_flag(&for_topic, &title, &action)?;
+                self.topic_view(&for_topic).map(Reply::Topic)
+            }
+            Command::KeepFoundation { suggestion_id, keep } => {
+                let topic_id = self.keep_foundation(&suggestion_id, keep)?;
+                self.topic_view(&topic_id).map(Reply::Topic)
+            }
             Command::GetReadingList { topic_id } => self.reading_list(topic_id.as_deref()).map(Reply::ReadingList),
             Command::GetResource { source_id } => self.resource(&source_id).await.map(Reply::Resource),
             Command::SaveNote { concept_id, text } => self.save_note(&concept_id, &text).map(Reply::Note),

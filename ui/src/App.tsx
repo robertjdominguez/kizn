@@ -2,11 +2,13 @@ import { Info, Monitor, Moon, Sun } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useCallback, useEffect, useState } from "react";
 import { About } from "./about/About";
+import { type Added, MapView } from "./map/MapView";
 import { fade, presence } from "./motion";
 import { Practice } from "./practice/Practice";
 import { Settings } from "./settings/Settings";
 import { applyTheme, loadTheme, type ThemeChoice } from "./theme/theme";
 import { Today } from "./today/Today";
+import { GroundCheck } from "./topic/GroundCheck";
 import { Setup } from "./topic/Setup";
 import { TopicPage } from "./topic/TopicPage";
 
@@ -46,27 +48,48 @@ function ThemeToggle() {
 type View =
   | { name: "today" }
   | { name: "settings" }
-  | { name: "topic"; id: string }
+  | { name: "topic"; id: string; from?: "map" }
   | { name: "setup"; id?: string }
-  | { name: "practice"; id?: string };
+  | { name: "practice"; id?: string }
+  | { name: "check"; id: string }
+  | { name: "map"; added?: Added };
 const viewFromHash = (): View => {
-  const h = window.location.hash;
+  // A query after the route: where a topic was opened from, or what was just
+  // added to the map.
+  const [h = "", query = ""] = window.location.hash.split("?");
+  const q = new URLSearchParams(query);
   if (h === "#/settings") return { name: "settings" };
   if (h === "#/new-topic") return { name: "setup" };
   const setup = h.match(/^#\/setup\/(.+)$/);
   if (setup?.[1]) return { name: "setup", id: decodeURIComponent(setup[1]) };
   if (h === "#/practice") return { name: "practice" };
+  if (h === "#/map") {
+    const title = q.get("added");
+    const under = q.get("under");
+    return { name: "map", added: title && under ? { title, under, node: q.get("node") ?? undefined } : undefined };
+  }
+  const check = h.match(/^#\/check\/(.+)$/);
+  if (check?.[1]) return { name: "check", id: decodeURIComponent(check[1]) };
   const practice = h.match(/^#\/practice\/(.+)$/);
   if (practice?.[1]) return { name: "practice", id: decodeURIComponent(practice[1]) };
   const topic = h.match(/^#\/topic\/(.+)$/);
-  if (topic?.[1]) return { name: "topic", id: decodeURIComponent(topic[1]) };
+  if (topic?.[1])
+    return { name: "topic", id: decodeURIComponent(topic[1]), from: q.get("from") === "map" ? "map" : undefined };
   return { name: "today" };
 };
 
 // Topics live under Today in the nav.
-const current = (v: View) => (v.name === "settings" ? "settings" : "today");
+const current = (v: View) =>
+  v.name === "settings" ? "settings" : v.name === "map" || (v.name === "topic" && v.from === "map") ? "map" : "today";
+const NAV = { today: "#/", map: "#/map", settings: "#/settings" } as const;
 const viewKey = (v: View) =>
-  v.name === "topic" ? `topic-${v.id}` : v.name === "practice" ? `practice-${v.id ?? ""}` : v.name;
+  v.name === "topic"
+    ? `topic-${v.id}`
+    : v.name === "practice"
+      ? `practice-${v.id ?? ""}`
+      : v.name === "check"
+        ? `check-${v.id}`
+        : v.name;
 
 export function App() {
   const [view, setView] = useState<View>(viewFromHash);
@@ -82,10 +105,10 @@ export function App() {
       <header className="flex h-11 shrink-0 items-center gap-2 border-b border-hairline px-4">
         <span className="mr-2 text-sm font-semibold tracking-tight text-ink">kizn</span>
         <nav aria-label="Main" className="flex items-center gap-1">
-          {(["today", "settings"] as const).map((v) => (
+          {(["today", "map", "settings"] as const).map((v) => (
             <a
               key={v}
-              href={v === "today" ? "#/" : "#/settings"}
+              href={NAV[v]}
               aria-current={current(view) === v ? "page" : undefined}
               className={`rounded-md px-2 py-1 text-sm capitalize transition-colors ${current(view) === v ? "bg-raised/60 text-ink" : "text-ink-3 hover:text-ink"}`}
             >
@@ -110,9 +133,11 @@ export function App() {
           <motion.div key={viewKey(view)} variants={fade} {...presence} className="h-full">
             {view.name === "today" && <Today />}
             {view.name === "settings" && <Settings />}
-            {view.name === "topic" && <TopicPage topicId={view.id} />}
+            {view.name === "topic" && <TopicPage topicId={view.id} from={view.from} />}
             {view.name === "setup" && <Setup topicId={view.id} />}
             {view.name === "practice" && <Practice topicId={view.id} />}
+            {view.name === "check" && <GroundCheck topicId={view.id} />}
+            {view.name === "map" && <MapView added={view.added} />}
           </motion.div>
         </AnimatePresence>
       </main>

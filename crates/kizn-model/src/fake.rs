@@ -547,6 +547,48 @@ impl FakeServer {
                     .collect();
                 Some(json!({ "items": items }))
             }
+            "draft-foundations" => {
+                // The same three each time, so a scenario can have one of
+                // them already (named exactly as listed, as asked).
+                let yours: Vec<String> = input["your_topics"]
+                    .as_array()
+                    .map(|a| a.iter().filter_map(|t| t.as_str().map(str::to_string)).collect())
+                    .unwrap_or_default();
+                let named = |want: &str| {
+                    yours.iter().find(|t| t.eq_ignore_ascii_case(want)).cloned().unwrap_or(want.to_string())
+                };
+                Some(json!({ "foundations": [
+                    {"title": named("Linux processes"), "why": format!("{} runs as processes the kernel isolates", s("title"))},
+                    {"title": named("Union filesystems"), "why": "images are layers stacked by a union filesystem"},
+                    {"title": named("Networking basics"), "why": "services talk over ports and addresses"},
+                ]}))
+            }
+            "check-ground" => {
+                // Three questions on the foundation, the key first; why each.
+                let f = s("foundation");
+                let items: Vec<Value> = (0..3)
+                    .map(|i| {
+                        json!({
+                            "concepts": [f],
+                            "tier": "understand",
+                            "stem": ([
+                                format!("Which statement about {f} holds?"),
+                                format!("A colleague asks what {f} is for. What do you tell them?"),
+                                format!("Which of these would someone who knows {f} reject as a myth?"),
+                            ][i % 3].clone()),
+                            "options": [
+                                {"text": format!("The core idea of {f}, stated plainly (case {})", i + 1), "correct": true, "why": format!("That's what {f} is about.")},
+                                {"text": format!("A common confusion about {f} (case {})", i + 1), "correct": false, "why": "It mixes up two ideas.", "misconception": "a mix-up", "foundation": "none"},
+                                {"text": format!("Something unrelated to {f} (case {})", i + 1), "correct": false, "why": "It's about something else.", "misconception": "off the mark", "foundation": "none"},
+                                {"text": format!("The opposite of {f}'s idea (case {})", i + 1), "correct": false, "why": "It reverses the idea.", "misconception": "reversed", "foundation": "none"},
+                            ],
+                            "source": "",
+                            "model_knowledge": true,
+                        })
+                    })
+                    .collect();
+                Some(json!({ "items": items }))
+            }
             "tutor" => {
                 // Grounded in the anchor, so a test can see it was loaded.
                 let anchor = &input["anchor"];

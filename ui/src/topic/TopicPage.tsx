@@ -14,12 +14,14 @@ import { whenDue } from "../practice/Summary";
 import { call, type TopicView } from "../rpc";
 import { ConceptSheet } from "../study/ConceptSheet";
 import { ReadingList } from "../study/ReadingList";
+import { Flags } from "./Flags";
+import { MapLinks } from "./MapLinks";
 
 // A topic. The main column answers "what now?" (Next up) and "what do I
 // know?" (Learn these, Your concepts); the sidebar holds the quiet rest (the
 // goal, the counts, kizn's question writing). Any concept's reading is one
 // click away, so the topic can be explored between sessions.
-export function TopicPage({ topicId }: { topicId: string }) {
+export function TopicPage({ topicId, from }: { topicId: string; from?: "map" }) {
   const [topic, setTopic] = useState<TopicView | null>(null);
   const [error, setError] = useState<string | null>(null);
   // The concept open in the sheet, to read about it.
@@ -55,10 +57,10 @@ export function TopicPage({ topicId }: { topicId: string }) {
           <motion.a
             variants={rise}
             {...presence}
-            href="#/"
+            href={from === "map" ? "#/map" : "#/"}
             className="flex w-fit items-center gap-0.5 rounded-md py-1 pr-2 text-sm text-ink-3 transition-colors hover:text-ink"
           >
-            <ChevronLeft size={15} aria-hidden /> Today
+            <ChevronLeft size={15} aria-hidden /> {from === "map" ? "Map" : "Today"}
           </motion.a>
           <AnimatePresence mode="wait">
             {error && (
@@ -84,6 +86,7 @@ export function TopicPage({ topicId }: { topicId: string }) {
         <Stage stagger={0.12} className="grid grid-cols-1 gap-10 lg:grid-cols-[minmax(0,1fr)_15rem]">
           <motion.div variants={stage(0.14, 0)} className="flex min-w-0 flex-col gap-8">
             <NextUp topic={confirmed} onReadAll={() => setReadingAll(true)} />
+            <Flags flags={confirmed.flags} />
             <LearnThese topic={confirmed} onOpen={setConcept} />
             <YourConcepts topic={confirmed} onOpen={setConcept} />
           </motion.div>
@@ -440,6 +443,7 @@ function Sidebar({ topic: t }: { topic: TopicView }) {
           ))}
         </AnimatePresence>
       </motion.div>
+      <MapLinks topic={t} />
     </motion.aside>
   );
 }

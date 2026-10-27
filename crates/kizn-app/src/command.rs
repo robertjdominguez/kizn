@@ -104,6 +104,46 @@ pub enum Command {
     MarkStudied {
         concept_id: String,
     },
+    /// Links one topic above another: "rests_on" (the lower is a foundation
+    /// of the upper) or "part_of" (the lower is a piece of the upper).
+    /// Refused when it would make a loop.
+    LinkTopics {
+        upper_id: String,
+        lower_id: String,
+        kind: String,
+    },
+    Unlink {
+        link_id: String,
+    },
+    /// Checking the ground for a confirmed topic: its kept foundations and
+    /// their questions.
+    GetGround {
+        topic_id: String,
+    },
+    AnswerGround {
+        item_id: String,
+        order: Vec<u32>,
+        chosen: u32,
+    },
+    /// What to do with a foundation: "start" (a new topic underneath, set up
+    /// now), "later" (stays a suggestion) or "dismiss" ("I've got this").
+    ResolveFoundation {
+        suggestion_id: String,
+        action: String,
+    },
+    /// The map: every topic and suggested foundation, and how they link.
+    GetMap,
+    /// Answers a flag: "add", "link" or "dismiss".
+    ResolveFlag {
+        for_topic: String,
+        title: String,
+        action: String,
+    },
+    /// Keeps or drops a foundation proposed for a draft.
+    KeepFoundation {
+        suggestion_id: String,
+        keep: bool,
+    },
     /// Every concept that needs work (missed, not yet recalled), with what
     /// there is to learn from: one topic's, or across topics. Starts looking
     /// for resources for any that have none.
@@ -188,6 +228,9 @@ pub enum Reply {
     Disputed(DisputeView),
     Thread(ThreadView),
     Resource(ResourceView),
+    Ground(GroundView),
+    Map(MapView),
+    Done,
     ReadingList(ReadingListView),
     Note(NoteView),
     Threads(Vec<ThreadSummary>),
@@ -517,6 +560,133 @@ pub struct StateCounts {
     pub unseen: i64,
 }
 
+/// The map: topics and suggested foundations as nodes, links as edges.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct MapView {
+    pub nodes: Vec<MapNode>,
+    pub edges: Vec<MapEdge>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct MapNode {
+    /// A topic's id, or a suggestion's.
+    pub id: String,
+    pub title: String,
+    /// "topic" or "suggestion".
+    pub kind: String,
+    /// A topic's status ("draft", "confirmed"); "suggested" for a suggestion.
+    pub status: String,
+    /// 0 with nothing below it.
+    #[ts(type = "number")]
+    pub layer: i64,
+    /// A topic's concepts by state, for its fill.
+    #[ts(type = "number")]
+    pub concepts: i64,
+    #[ts(type = "number")]
+    pub retained: i64,
+    #[ts(type = "number")]
+    pub recalled: i64,
+    #[ts(type = "number")]
+    pub seen: i64,
+    /// A suggestion's why, and the topic it's for.
+    pub why: Option<String>,
+    pub for_topic: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct MapEdge {
+    pub upper: String,
+    pub lower: String,
+    /// "rests_on" or "part_of".
+    pub kind: String,
+    /// To a suggestion: drawn dashed.
+    pub suggested: bool,
+}
+
+/// Misses that point at a foundation.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct FlagView {
+    pub for_topic: String,
+    pub for_title: String,
+    /// The foundation they point at.
+    pub title: String,
+    /// A topic the learner has, when it is one.
+    pub topic_id: Option<String>,
+    /// "new" (add it underneath), "link" (a topic they have, not linked yet)
+    /// or "review" (already one of this topic's foundations).
+    pub kind: String,
+    #[ts(type = "number")]
+    pub misses: i64,
+}
+
+/// Checking the ground for a topic.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct GroundView {
+    pub topic_id: String,
+    pub topic_title: String,
+    /// The questions are still being written.
+    pub writing: bool,
+    pub foundations: Vec<GroundFoundation>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct GroundFoundation {
+    pub suggestion_id: String,
+    pub title: String,
+    pub why: Option<String>,
+    /// The suggestion's status ("kept", "later", "dismissed", "started").
+    pub status: String,
+    /// "solid" or "shaky" once every question is answered.
+    pub result: Option<String>,
+    pub questions: Vec<GroundQuestion>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct GroundQuestion {
+    pub id: String,
+    pub stem: String,
+    pub options: Vec<String>,
+    pub order: Vec<u32>,
+    /// Once answered: the position picked, whether it was right, the key's
+    /// position and every option's why.
+    pub answered: Option<u32>,
+    pub correct: Option<bool>,
+    pub key: Option<u32>,
+    pub feedback: Vec<OptionFeedback>,
+}
+
+/// A foundation proposed for a topic.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct SuggestionView {
+    pub id: String,
+    pub title: String,
+    pub why: Option<String>,
+    /// "draft", "check" or "flag".
+    pub source: String,
+    /// "open", "kept", "dropped", "later", "started", "linked" or "dismissed".
+    pub status: String,
+    /// The topic it is: one the learner has, or one started from it.
+    pub topic_id: Option<String>,
+    pub topic_title: Option<String>,
+}
+
+/// A topic at the other end of a link.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct LinkedTopic {
+    pub link_id: String,
+    pub topic_id: String,
+    pub title: String,
+}
+
 /// A topic, draft or confirmed, with its outcomes, concepts and bank.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]
@@ -546,6 +716,19 @@ pub struct TopicView {
     pub new_now: i64,
     #[ts(type = "number | null")]
     pub new_outcome_ord: Option<i64>,
+    /// Its foundations, the topics it supports, its parts, and the broader
+    /// topics it's part of.
+    pub rests_on: Vec<LinkedTopic>,
+    pub supports: Vec<LinkedTopic>,
+    pub parts: Vec<LinkedTopic>,
+    pub part_of: Vec<LinkedTopic>,
+    /// Foundations proposed for it (from its draft, its check, its misses).
+    pub foundations: Vec<SuggestionView>,
+    /// Foundations its recent misses point at.
+    pub flags: Vec<FlagView>,
+    /// Its layer on the map: 0 with nothing below it.
+    #[ts(type = "number")]
+    pub layer: i64,
     /// Active items across the topic, and what a full bank holds.
     #[ts(type = "number")]
     pub active: i64,
@@ -759,6 +942,8 @@ pub struct TodayView {
     /// Monday to Sunday, this week.
     pub week: Vec<DayView>,
     pub counts: StateCounts,
+    /// Flags across topics.
+    pub flags: Vec<FlagView>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]

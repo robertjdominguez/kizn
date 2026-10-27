@@ -138,7 +138,8 @@ demo *args:
       mkdir -p "{{ demo_dir }}"
       sed 's|{{{{FAKE}}|http://127.0.0.1:7880|g' tests/fixtures/topic-with-bank/config.toml > "{{ demo_dir }}/config.toml"
       KIZN_DATA_DIR="{{ demo_dir }}" KIZN_CONFIG_DIR="{{ demo_dir }}" "{{ bridge }}" seed tests/fixtures/topic-with-bank/seed.sql
-      echo "demo: seeded topic-with-bank"
+      KIZN_DATA_DIR="{{ demo_dir }}" KIZN_CONFIG_DIR="{{ demo_dir }}" "{{ bridge }}" seed tests/fixtures/demo-map/seed.sql
+      echo "demo: seeded topic-with-bank and the demo map"
     fi
     KIZN_DEV_DIR="{{ demo_dir }}" just dev mock "${pass[@]}"
 

@@ -160,6 +160,9 @@ async fn draft_inner(ctx: &Ctx, topic: &TopicRow, stop: &AtomicBool) -> Result<(
         ctx.store.set_concepts_state(&o.id, "done")?;
         ctx.changed(&topic.id);
     }
+    // Foundations last: proposed once the outcomes are known, never failing
+    // the draft.
+    ctx.draft_foundations(topic, &author).await?;
     ctx.store.set_draft_state(&topic.id, "drafted", None)?;
     Ok(())
 }
@@ -204,6 +207,38 @@ async fn draft_outcomes(ctx: &Ctx, topic: &TopicRow, author: &RoleModel) -> Resu
 // ---- commands ------------------------------------------------------------------------
 
 impl App {
+    /// Resolves a foundation: "start" sets up a new topic underneath (linked
+    /// as a foundation, drafting under way) and returns it; "later" and
+    /// "dismiss" return the topic it was for.
+    pub(crate) fn resolve_foundation(&self, suggestion_id: &str, action: &str) -> Result<crate::Reply, AppError> {
+        let s = self
+            .store
+            .suggestions(None)?
+            .into_iter()
+            .find(|s| s.id == suggestion_id)
+            .ok_or_else(|| AppError::Refused("there's no such suggestion".into()))?;
+        match action {
+            "start" => {
+                let for_topic =
+                    self.store.topic(&s.for_topic)?.ok_or_else(|| AppError::Refused("its topic is gone".into()))?;
+                let goal = match &s.why {
+                    Some(why) => format!("the foundations for {}: {why}", for_topic.title),
+                    None => format!("the foundations for {}", for_topic.title),
+                };
+                let started = self.start_topic(&s.title, &goal)?;
+                self.link_topics(&s.for_topic, &started.id, "rests_on")?;
+                self.store.set_suggestion(&s.id, "started", Some(&started.id))?;
+                self.ctx.changed(&s.for_topic);
+                self.topic_view(&started.id).map(crate::Reply::Topic)
+            }
+            "later" | "dismiss" => {
+                let topic_id = self.set_aside_foundation(&s.id, action == "dismiss")?;
+                self.topic_view(&topic_id).map(crate::Reply::Topic)
+            }
+            other => Err(AppError::Refused(format!("there's no way to resolve a foundation called {other:?}"))),
+        }
+    }
+
     pub(crate) fn start_topic(&self, title: &str, goal: &str) -> Result<TopicView, AppError> {
         let (title, goal) = (title.trim(), goal.trim());
         if title.is_empty() {
@@ -310,6 +345,8 @@ impl App {
             self.store.set_bank_state(&o.id, "waiting", None, None)?;
         }
         self.store.confirm_topic(&topic.id, &self.ctx.now())?;
+        self.link_kept_foundations(&topic.id)?;
+        self.start_ground(&topic.id);
         self.drafting.lock().unwrap().remove(&topic.id);
         self.ctx.changed(&topic.id);
         self.wake_bank();
@@ -383,7 +420,15 @@ impl App {
             });
         }
         let p = if topic.status == "confirmed" { self.practice_state(&topic.id)? } else { Default::default() };
+        let links = self.topic_links(&topic.id)?;
         Ok(TopicView {
+            foundations: self.suggestion_views(&topic.id)?,
+            flags: if topic.status == "confirmed" { self.flags(&topic.id)? } else { vec![] },
+            rests_on: links.rests_on,
+            supports: links.supports,
+            parts: links.parts,
+            part_of: links.part_of,
+            layer: links.layer,
             can_practise: p.due + p.new > 0,
             practised: p.practised,
             next_due_in_days: p.next_due_in_days,

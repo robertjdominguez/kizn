@@ -79,6 +79,41 @@ pub struct AttemptRow {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LinkRow {
+    pub id: String,
+    pub upper_id: String,
+    pub lower_id: String,
+    /// rests_on | part_of
+    pub kind: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SuggestionRow {
+    pub id: String,
+    pub for_topic: String,
+    pub title: String,
+    pub why: Option<String>,
+    /// draft | check | flag
+    pub source: String,
+    /// open | kept | dropped | later | started | linked | dismissed
+    pub status: String,
+    /// The topic it is (one the learner has, or one started from it).
+    pub topic_id: Option<String>,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GroundItemRow {
+    pub id: String,
+    pub suggestion_id: String,
+    pub stem: String,
+    pub options_json: String,
+    /// The learner's answer: the stored option chosen and whether it's right.
+    pub answer: Option<(usize, bool)>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ThreadRow {
     pub id: String,
     pub topic_id: String,
@@ -520,6 +555,120 @@ impl Store {
         }
         tx.commit()?;
         Ok(item)
+    }
+
+    pub fn insert_link(&self, l: &LinkRow) -> Result<()> {
+        self.conn.lock().unwrap().execute(
+            "INSERT INTO links (id, upper_id, lower_id, kind, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![l.id, l.upper_id, l.lower_id, l.kind, l.created_at],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_link(&self, id: &str) -> Result<()> {
+        self.conn.lock().unwrap().execute("DELETE FROM links WHERE id = ?1", [id])?;
+        Ok(())
+    }
+
+    /// Every link on the map.
+    pub fn links(&self) -> Result<Vec<LinkRow>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt =
+            conn.prepare("SELECT id, upper_id, lower_id, kind, created_at FROM links ORDER BY created_at, id")?;
+        let rows = stmt.query_map([], |r| {
+            Ok(LinkRow {
+                id: r.get(0)?,
+                upper_id: r.get(1)?,
+                lower_id: r.get(2)?,
+                kind: r.get(3)?,
+                created_at: r.get(4)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    pub fn insert_suggestion(&self, s: &SuggestionRow) -> Result<()> {
+        self.conn.lock().unwrap().execute(
+            "INSERT INTO suggestions (id, for_topic, title, why, source, status, topic_id, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![s.id, s.for_topic, s.title, s.why, s.source, s.status, s.topic_id, s.created_at],
+        )?;
+        Ok(())
+    }
+
+    /// A topic's suggested foundations, oldest first; or every one.
+    pub fn suggestions(&self, for_topic: Option<&str>) -> Result<Vec<SuggestionRow>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, for_topic, title, why, source, status, topic_id, created_at FROM suggestions
+             WHERE ?1 IS NULL OR for_topic = ?1 ORDER BY created_at, rowid",
+        )?;
+        let rows = stmt.query_map([for_topic], |r| {
+            Ok(SuggestionRow {
+                id: r.get(0)?,
+                for_topic: r.get(1)?,
+                title: r.get(2)?,
+                why: r.get(3)?,
+                source: r.get(4)?,
+                status: r.get(5)?,
+                topic_id: r.get(6)?,
+                created_at: r.get(7)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    pub fn set_suggestion(&self, id: &str, status: &str, topic_id: Option<&str>) -> Result<()> {
+        self.conn.lock().unwrap().execute(
+            "UPDATE suggestions SET status = ?2, topic_id = COALESCE(?3, topic_id) WHERE id = ?1",
+            params![id, status, topic_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn insert_ground_item(
+        &self,
+        id: &str,
+        suggestion_id: &str,
+        stem: &str,
+        options_json: &str,
+        at: &str,
+    ) -> Result<()> {
+        self.conn.lock().unwrap().execute(
+            "INSERT INTO ground_items (id, suggestion_id, stem, options_json, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![id, suggestion_id, stem, options_json, at],
+        )?;
+        Ok(())
+    }
+
+    /// A foundation's check questions, with any answers.
+    pub fn ground_items(&self, suggestion_id: &str) -> Result<Vec<GroundItemRow>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT g.id, g.suggestion_id, g.stem, g.options_json, a.chosen, a.correct FROM ground_items g
+             LEFT JOIN ground_answers a ON a.item_id = g.id WHERE g.suggestion_id = ?1 ORDER BY g.created_at, g.rowid",
+        )?;
+        let rows = stmt.query_map([suggestion_id], |r| {
+            let chosen: Option<i64> = r.get(4)?;
+            let correct: Option<i64> = r.get(5)?;
+            Ok(GroundItemRow {
+                id: r.get(0)?,
+                suggestion_id: r.get(1)?,
+                stem: r.get(2)?,
+                options_json: r.get(3)?,
+                answer: chosen.zip(correct).map(|(c, ok)| (c as usize, ok != 0)),
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    pub fn answer_ground(&self, item_id: &str, chosen: usize, correct: bool, at: &str) -> Result<()> {
+        self.conn.lock().unwrap().execute(
+            "INSERT INTO ground_answers (item_id, chosen, correct, at) VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT (item_id) DO NOTHING",
+            params![item_id, chosen as i64, correct as i64, at],
+        )?;
+        Ok(())
     }
 
     pub fn insert_thread(&self, t: &ThreadRow) -> Result<()> {

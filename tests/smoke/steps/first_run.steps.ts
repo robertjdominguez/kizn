@@ -16,10 +16,14 @@ When("I open kizn", async () => {
   await $("main").waitForExist({ timeout: 15_000 });
 });
 
+// On a cold runner, the first launch and Today's staged entrance can take a
+// while: wait as long as opening the app may.
+const SHOWN = { wait: 15_000 };
+
 Then("I see {string}", async (text: string) => {
-  await expect($(`//*[normalize-space(text())="${text}"]`)).toBeDisplayed();
+  await expect($(`//*[normalize-space(text())="${text}"]`)).toBeDisplayed(SHOWN);
 });
 
 Then("no model is configured", async () => {
-  await expect($(`//*[normalize-space(text())="No model connected"]`)).toBeDisplayed();
+  await expect($(`//*[normalize-space(text())="No model connected"]`)).toBeDisplayed(SHOWN);
 });
