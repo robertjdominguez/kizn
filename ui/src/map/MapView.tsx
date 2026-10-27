@@ -265,7 +265,9 @@ export function MapView({ added }: { added?: Added }) {
       {error && <p className="text-sm text-danger">{error}</p>}
       {map && map.nodes.length === 0 && <p className="text-sm text-ink-3">Your map fills in as you add topics.</p>}
       {shown && shown.nodes.length > 0 && (
-        <div className="relative overflow-x-auto pb-6">
+        // Scrolling sideways clips both ways: room around the map for a
+        // selected topic's lift and an arrival's glow.
+        <div className="relative -mx-2 overflow-x-auto px-2 pt-3 pb-6">
           <motion.div
             className="relative mx-auto"
             initial={false}
