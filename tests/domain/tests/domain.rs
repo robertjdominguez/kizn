@@ -486,6 +486,14 @@ async fn topic_no_credit(w: &mut Kizn) {
     w.topic_from(Command::ConfirmTopic { topic_id }).await;
 }
 
+#[given("a confirmed topic whose checker refuses every question")]
+async fn topic_checker_refuses(w: &mut Kizn) {
+    drafted_topic(w).await;
+    w.use_for(Role::Checker, "picky", Behaviour::CheckerDisagrees, true).await;
+    let topic_id = w.topic_id();
+    w.topic_from(Command::ConfirmTopic { topic_id }).await;
+}
+
 #[given("drafting failed because the author couldn't run requests")]
 async fn drafting_failed(w: &mut Kizn) {
     w.use_for(Role::Author, "broke", Behaviour::NoCredit, true).await;
@@ -526,7 +534,7 @@ async fn drafting_carries_on(w: &mut Kizn) {
 #[when("the bank is written")]
 async fn bank_written(w: &mut Kizn) {
     w.wait_for("every outcome's bank to finish", |t| {
-        t.outcomes.iter().all(|o| o.bank_state == "ready" || o.bank_state == "failed")
+        t.outcomes.iter().all(|o| matches!(o.bank_state.as_str(), "ready" | "failed" | "resting"))
     })
     .await;
 }
@@ -613,6 +621,15 @@ fn each_outcome_account(w: &mut Kizn) {
         assert_eq!(o.bank_state, "failed", "outcome {}", o.ord);
         let why = o.bank_error.as_deref().unwrap_or("");
         assert!(why.starts_with("the account can't run requests yet"), "outcome {}: {why}", o.ord);
+    }
+}
+
+#[then("each outcome rests, and kizn will try it again by itself")]
+fn each_outcome_rests(w: &mut Kizn) {
+    for o in &w.topic.as_ref().unwrap().outcomes {
+        // Resting asks nothing of the learner, unlike "failed".
+        assert_eq!(o.bank_state, "resting", "outcome {}", o.ord);
+        assert!(o.retry_at.is_some(), "outcome {} has no time to try again", o.ord);
     }
 }
 

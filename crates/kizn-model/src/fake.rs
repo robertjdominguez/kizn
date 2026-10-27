@@ -495,7 +495,13 @@ impl FakeServer {
             "write-items" => {
                 let kind = s("kind");
                 // "remember or understand": a real model picks one.
-                let tier = s("tier").rsplit(" or ").next().unwrap_or("understand").to_string();
+                // The last tier the request allows (each is a single tier).
+                let tier = input["tiers"]
+                    .as_array()
+                    .and_then(|t| t.last())
+                    .and_then(|t| t.as_str())
+                    .unwrap_or("understand")
+                    .to_string();
                 let count = input["count"].as_u64().unwrap_or(1) as usize;
                 let concepts: Vec<String> = input["concepts"]
                     .as_array()

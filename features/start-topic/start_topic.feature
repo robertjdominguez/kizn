@@ -51,6 +51,12 @@ Feature: Start a topic
     Then kizn tries writing it again straight away
 
   @domain
+  Scenario: Questions that keep failing the checks rest, then come back by themselves
+    Given a confirmed topic whose checker refuses every question
+    When the bank is written
+    Then each outcome rests, and kizn will try it again by itself
+
+  @domain
   Scenario: A draft that fails can carry on
     Given drafting failed because the author couldn't run requests
     When I fix the author and try again

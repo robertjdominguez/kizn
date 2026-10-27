@@ -12,9 +12,14 @@ target: string, target_plain: string, reason: string,
  */
 concepts_state: string, 
 /**
- * "waiting", "writing", "ready" or "failed".
+ * "waiting", "writing", "ready", "resting" (nothing usable yet; kizn
+ * tries again by itself) or "failed" (something may need fixing).
  */
-bank_state: string, bank_error: string | null, active: number, expected: number, concepts: Array<ConceptView>, 
+bank_state: string, bank_error: string | null, 
+/**
+ * When a resting or failed outcome is tried again, in UTC.
+ */
+retry_at: string | null, active: number, expected: number, concepts: Array<ConceptView>, 
 /**
  * The kinds of practice the outcome gets, in order, each with how many
  * questions it has of how many it holds: one recall slot per concept,
