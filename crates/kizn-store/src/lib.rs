@@ -19,6 +19,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("../migrations/0005_sources.sql"),
     include_str!("../migrations/0006_threads.sql"),
     include_str!("../migrations/0007_reading.sql"),
+    include_str!("../migrations/0008_links.sql"),
 ];
 
 pub const SCHEMA_VERSION: u32 = MIGRATIONS.len() as u32;
@@ -34,7 +35,7 @@ pub enum StoreError {
 pub type Result<T> = std::result::Result<T, StoreError>;
 
 pub use topics::{
-    AttemptRow, BatchCounts, ConceptRow, ItemRow, MessageRow, OutcomeRow, SourceRow, ThreadRow, TopicRow,
+    AttemptRow, BatchCounts, ConceptRow, ItemRow, LinkRow, MessageRow, OutcomeRow, SourceRow, ThreadRow, TopicRow,
 };
 
 /// What's in a database file, read-only: for `just inspect db`.
@@ -173,12 +174,14 @@ mod tests {
                 "concepts",
                 "item_batches",
                 "items",
+                "links",
                 "messages",
                 "notes",
                 "outcomes",
                 "provider_checks",
                 "sources",
                 "studied",
+                "suggestions",
                 "threads",
                 "topics"
             ]

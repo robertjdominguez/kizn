@@ -383,7 +383,13 @@ impl App {
             });
         }
         let p = if topic.status == "confirmed" { self.practice_state(&topic.id)? } else { Default::default() };
+        let links = self.topic_links(&topic.id)?;
         Ok(TopicView {
+            rests_on: links.rests_on,
+            supports: links.supports,
+            parts: links.parts,
+            part_of: links.part_of,
+            layer: links.layer,
             can_practise: p.due + p.new > 0,
             practised: p.practised,
             next_due_in_days: p.next_due_in_days,

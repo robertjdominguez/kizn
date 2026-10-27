@@ -104,6 +104,17 @@ pub enum Command {
     MarkStudied {
         concept_id: String,
     },
+    /// Links one topic above another: "rests_on" (the lower is a foundation
+    /// of the upper) or "part_of" (the lower is a piece of the upper).
+    /// Refused when it would make a loop.
+    LinkTopics {
+        upper_id: String,
+        lower_id: String,
+        kind: String,
+    },
+    Unlink {
+        link_id: String,
+    },
     /// Every concept that needs work (missed, not yet recalled), with what
     /// there is to learn from: one topic's, or across topics. Starts looking
     /// for resources for any that have none.
@@ -188,6 +199,7 @@ pub enum Reply {
     Disputed(DisputeView),
     Thread(ThreadView),
     Resource(ResourceView),
+    Done,
     ReadingList(ReadingListView),
     Note(NoteView),
     Threads(Vec<ThreadSummary>),
@@ -517,6 +529,15 @@ pub struct StateCounts {
     pub unseen: i64,
 }
 
+/// A topic at the other end of a link.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct LinkedTopic {
+    pub link_id: String,
+    pub topic_id: String,
+    pub title: String,
+}
+
 /// A topic, draft or confirmed, with its outcomes, concepts and bank.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]
@@ -546,6 +567,15 @@ pub struct TopicView {
     pub new_now: i64,
     #[ts(type = "number | null")]
     pub new_outcome_ord: Option<i64>,
+    /// Its foundations, the topics it supports, its parts, and the broader
+    /// topics it's part of.
+    pub rests_on: Vec<LinkedTopic>,
+    pub supports: Vec<LinkedTopic>,
+    pub parts: Vec<LinkedTopic>,
+    pub part_of: Vec<LinkedTopic>,
+    /// Its layer on the map: 0 with nothing below it.
+    #[ts(type = "number")]
+    pub layer: i64,
     /// Active items across the topic, and what a full bank holds.
     #[ts(type = "number")]
     pub active: i64,

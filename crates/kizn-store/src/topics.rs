@@ -79,6 +79,16 @@ pub struct AttemptRow {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LinkRow {
+    pub id: String,
+    pub upper_id: String,
+    pub lower_id: String,
+    /// rests_on | part_of
+    pub kind: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ThreadRow {
     pub id: String,
     pub topic_id: String,
@@ -520,6 +530,36 @@ impl Store {
         }
         tx.commit()?;
         Ok(item)
+    }
+
+    pub fn insert_link(&self, l: &LinkRow) -> Result<()> {
+        self.conn.lock().unwrap().execute(
+            "INSERT INTO links (id, upper_id, lower_id, kind, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![l.id, l.upper_id, l.lower_id, l.kind, l.created_at],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_link(&self, id: &str) -> Result<()> {
+        self.conn.lock().unwrap().execute("DELETE FROM links WHERE id = ?1", [id])?;
+        Ok(())
+    }
+
+    /// Every link on the map.
+    pub fn links(&self) -> Result<Vec<LinkRow>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt =
+            conn.prepare("SELECT id, upper_id, lower_id, kind, created_at FROM links ORDER BY created_at, id")?;
+        let rows = stmt.query_map([], |r| {
+            Ok(LinkRow {
+                id: r.get(0)?,
+                upper_id: r.get(1)?,
+                lower_id: r.get(2)?,
+                kind: r.get(3)?,
+                created_at: r.get(4)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
     pub fn insert_thread(&self, t: &ThreadRow) -> Result<()> {

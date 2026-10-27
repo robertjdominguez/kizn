@@ -54,6 +54,8 @@ struct Kizn {
     /// Writing batches started while the last tutor reply streamed.
     batches_during_reply: Option<i64>,
     reading: Option<kizn_app::ReadingListView>,
+    topic_ids: std::collections::HashMap<String, String>,
+    link_result: Option<Result<(), String>>,
 }
 
 impl std::fmt::Debug for Kizn {
@@ -91,6 +93,8 @@ impl Kizn {
             added: None,
             batches_during_reply: None,
             reading: None,
+            topic_ids: Default::default(),
+            link_result: None,
         }
     }
 
@@ -1706,6 +1710,100 @@ fn asked_again(w: &mut Kizn) {
     let c = w.concept.as_ref().unwrap();
     assert_eq!(c.finding, "found");
     assert_eq!(c.sources.len(), 3, "{:#?}", c.sources);
+}
+
+// --- Topics that rest on topics -------------------------------------------------------
+
+impl Kizn {
+    /// A confirmed topic straight in the store (links don't need a bank).
+    fn make_topic(&mut self, title: &str) {
+        self.ensure_open();
+        let id = format!("01TOPIC{:0>19}", self.topic_ids.len() + 1);
+        let store = self.store();
+        store.create_draft_topic(&id, title, "to see how topics link", "2026-10-25 09:00:00").unwrap();
+        store.confirm_topic(&id, "2026-10-25 09:00:00").unwrap();
+        self.topic_ids.insert(title.to_string(), id);
+    }
+
+    fn tid(&self, title: &str) -> String {
+        self.topic_ids.get(title).unwrap_or_else(|| panic!("no topic {title:?}")).clone()
+    }
+
+    async fn link(&mut self, upper: &str, lower: &str, kind: &str) -> Result<(), String> {
+        let (upper_id, lower_id) = (self.tid(upper), self.tid(lower));
+        match self.command(Command::LinkTopics { upper_id, lower_id, kind: kind.into() }).await {
+            Ok(Reply::Done) => Ok(()),
+            Err(AppError::Refused(why)) => Err(why),
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    async fn topic_named(&mut self, title: &str) -> TopicView {
+        let topic_id = self.tid(title);
+        self.topic_from(Command::GetTopic { topic_id }).await
+    }
+}
+
+#[given(expr = "topics {string} and {string}")]
+fn topics_two(w: &mut Kizn, a: String, b: String) {
+    w.make_topic(&a);
+    w.make_topic(&b);
+}
+
+#[given(expr = "topics {string}, {string} and {string}")]
+fn topics_three(w: &mut Kizn, a: String, b: String, c: String) {
+    for t in [a, b, c] {
+        w.make_topic(&t);
+    }
+}
+
+#[given(expr = "{string} rests on {string}, which rests on {string}")]
+async fn chain(w: &mut Kizn, a: String, b: String, c: String) {
+    w.link(&a, &b, "rests_on").await.unwrap();
+    w.link(&b, &c, "rests_on").await.unwrap();
+}
+
+#[when(expr = "I make {string} a foundation of {string}")]
+async fn make_foundation(w: &mut Kizn, lower: String, upper: String) {
+    w.link_result = Some(w.link(&upper, &lower, "rests_on").await);
+}
+
+#[when(expr = "I make {string} part of {string}")]
+async fn make_part(w: &mut Kizn, lower: String, upper: String) {
+    w.link_result = Some(w.link(&upper, &lower, "part_of").await);
+}
+
+#[then(expr = "{string} rests on {string}")]
+async fn rests_on(w: &mut Kizn, upper: String, lower: String) {
+    assert_eq!(w.link_result.clone(), Some(Ok(())));
+    let t = w.topic_named(&upper).await;
+    assert_eq!(t.rests_on.iter().map(|l| l.title.as_str()).collect::<Vec<_>>(), [lower.as_str()]);
+}
+
+#[then(expr = "{string} supports {string}")]
+async fn supports(w: &mut Kizn, lower: String, upper: String) {
+    let t = w.topic_named(&lower).await;
+    assert_eq!(t.supports.iter().map(|l| l.title.as_str()).collect::<Vec<_>>(), [upper.as_str()]);
+}
+
+#[then(expr = "{string} sits two layers above {string}")]
+async fn two_layers(w: &mut Kizn, upper: String, lower: String) {
+    let (u, l) = (w.topic_named(&upper).await.layer, w.topic_named(&lower).await.layer);
+    assert_eq!(u - l, 2, "{upper} is layer {u}, {lower} layer {l}");
+}
+
+#[then("I'm told it would make a loop")]
+fn told_loop(w: &mut Kizn) {
+    let why = w.link_result.clone().expect("nothing linked").expect_err("the loop was linked");
+    assert!(why.contains("would make a loop"), "{why}");
+}
+
+#[then(expr = "{string} is made up of {string}")]
+async fn made_up_of(w: &mut Kizn, upper: String, part: String) {
+    let t = w.topic_named(&upper).await;
+    assert_eq!(t.parts.iter().map(|l| l.title.as_str()).collect::<Vec<_>>(), [part.as_str()]);
+    let p = w.topic_named(&part).await;
+    assert_eq!(p.part_of.iter().map(|l| l.title.as_str()).collect::<Vec<_>>(), [upper.as_str()]);
 }
 
 // The scenarios run on a thread with a roomy stack: the world and its step

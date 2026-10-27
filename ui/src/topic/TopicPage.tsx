@@ -14,6 +14,7 @@ import { whenDue } from "../practice/Summary";
 import { call, type TopicView } from "../rpc";
 import { ConceptSheet } from "../study/ConceptSheet";
 import { ReadingList } from "../study/ReadingList";
+import { MapLinks } from "./MapLinks";
 
 // A topic. The main column answers "what now?" (Next up) and "what do I
 // know?" (Learn these, Your concepts); the sidebar holds the quiet rest (the
@@ -440,6 +441,7 @@ function Sidebar({ topic: t }: { topic: TopicView }) {
           ))}
         </AnimatePresence>
       </motion.div>
+      <MapLinks topic={t} />
     </motion.aside>
   );
 }

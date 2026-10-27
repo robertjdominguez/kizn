@@ -42,11 +42,14 @@ const REPLY = {
   get_thread: "thread",
   get_resource: "resource",
   get_reading_list: "reading_list",
+  link_topics: "done",
+  unlink: "done",
   save_note: "note",
   add_source: "concept",
 } as const satisfies Record<Command["type"], Reply["type"]>;
 
-type ReplyData<T extends Reply["type"]> = Extract<Reply, { type: T }>["data"];
+// A reply's data, or null for one that carries none ("done").
+type ReplyData<T extends Reply["type"]> = Extract<Reply, { type: T }> extends { data: infer D } ? D : null;
 export type ReplyFor<C extends Command> = ReplyData<(typeof REPLY)[C["type"]]>;
 
 export class RpcError extends Error {
@@ -78,7 +81,7 @@ async function send(cmd: Command): Promise<Reply> {
 export async function call<C extends Command>(cmd: C): Promise<ReplyFor<C>> {
   const reply = await send(cmd);
   if (reply.type !== REPLY[cmd.type]) throw new Error(`${cmd.type} got a ${reply.type} reply`);
-  return reply.data as ReplyFor<C>;
+  return ("data" in reply ? reply.data : null) as ReplyFor<C>;
 }
 
 export type { AppInfo, SettingsView, TodayView, TopicView };
