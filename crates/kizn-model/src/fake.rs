@@ -135,6 +135,10 @@ async fn handle(
     body: Bytes,
 ) -> Response {
     let path = uri.path();
+    // The fake web: pages sources are checked against (any host).
+    if method == Method::GET && path.starts_with("/web/") {
+        return web_page(path);
+    }
     let (behaviour, rest) = match path.trim_start_matches('/').split_once('/') {
         Some((first, rest)) if Behaviour::from_name(first).is_some() => {
             (Behaviour::from_name(first).unwrap(), format!("/{rest}"))
@@ -164,6 +168,71 @@ async fn handle(
         (Method::POST, "/v1/messages") => anthropic(behaviour, &req, answer),
         _ => error(StatusCode::NOT_FOUND, "no such route"),
     }
+}
+
+/// Pages for checking suggested sources: a readable article about whatever
+/// its slug says, an app shell, an off-topic article, and a 404.
+fn web_page(path: &str) -> Response {
+    let html = |status: StatusCode, body: String| {
+        Response::builder()
+            .status(status)
+            .header(header::CONTENT_TYPE, "text/html; charset=utf-8")
+            .body(Body::from(body))
+            .unwrap()
+    };
+    let rest = &path["/web/".len()..];
+    match rest.split_once('/') {
+        Some(("article", slug)) => {
+            let about = percent_decode(slug).replace('-', " ");
+            let para = format!(
+                "<p>This page explains {about}. In short: {about}. It walks through an example, the common \
+                 mix-ups people make about it, and how to check it yourself in a real system. Read it once \
+                 slowly, then try explaining {about} to a colleague without looking.</p>"
+            );
+            html(
+                StatusCode::OK,
+                format!(
+                    "<!doctype html><html><head><title>{about} | Example Docs</title><script>analytics()</script>\
+                     </head><body><nav>Docs Guides Reference</nav><article><h1>{about}</h1>{}</article>\
+                     <footer>Example Docs</footer></body></html>",
+                    para.repeat(6)
+                ),
+            )
+        }
+        _ if rest == "shell" => html(
+            StatusCode::OK,
+            "<!doctype html><html><head><title>Learn</title></head><body><div id=\"root\"></div>\
+             <script type=\"module\" src=\"/assets/app.js\"></script></body></html>"
+                .into(),
+        ),
+        _ if rest == "offtopic" => html(
+            StatusCode::OK,
+            format!(
+                "<html><head><title>Growing tomatoes</title></head><body><p>{}</p></body></html>",
+                "Tomatoes need full sun, steady watering and a long warm summer to ripen well. ".repeat(30)
+            ),
+        ),
+        _ => html(StatusCode::NOT_FOUND, "<html><body>Not found</body></html>".into()),
+    }
+}
+
+fn percent_decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = vec![];
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%'
+            && i + 2 < bytes.len()
+            && let Ok(b) = u8::from_str_radix(&s[i + 1..i + 3], 16)
+        {
+            out.push(b);
+            i += 3;
+            continue;
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 const NO_CREDIT: &str = "Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.";
@@ -404,6 +473,21 @@ impl FakeServer {
                     })
                     .collect();
                 Some(json!({ "items": items }))
+            }
+            "suggest-sources" => {
+                // Two real pages around a dead link and an app shell: kizn
+                // should offer the two real ones only.
+                let concept = s("concept");
+                let slug: String = concept
+                    .chars()
+                    .map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '-' })
+                    .collect();
+                Some(json!({ "sources": [
+                    {"url": format!("https://docs.example.org/web/article/{slug}"), "title": format!("{concept}: the guide"), "why": "The official explanation, with a worked example."},
+                    {"url": "https://old.example.org/web/missing", "title": "Archived notes", "why": "Background reading."},
+                    {"url": "https://learn.example.com/web/shell", "title": "Interactive course", "why": "A hands-on walkthrough."},
+                    {"url": format!("https://blog.example.net/web/article/{slug}"), "title": format!("Understanding {concept}"), "why": "A plain-language take on the common mix-ups."},
+                ]}))
             }
             "blind-check" => {
                 let stem = s("stem");

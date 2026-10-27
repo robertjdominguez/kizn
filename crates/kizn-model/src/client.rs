@@ -91,6 +91,40 @@ impl Http {
     }
 }
 
+/// A page fetched for checking: what came back, the body cut at a cap.
+#[derive(Debug, Clone)]
+pub struct Page {
+    pub status: u16,
+    pub content_type: String,
+    pub body: String,
+}
+
+impl Http {
+    /// Fetches a page once (redirects followed), stopping after `max_bytes`.
+    /// Sources go through here, so tests and mock mode get the fake web.
+    pub async fn fetch_page(&self, url: &str, timeout: Duration, max_bytes: usize) -> Result<Page, String> {
+        let (target, host) = self.route(url.to_string());
+        let mut r = self.client.get(&target).timeout(timeout).header("accept", "text/html,text/plain;q=0.9,*/*;q=0.5");
+        if let Some(host) = host {
+            r = r.header(REDIRECT_HOST_HEADER, host);
+        }
+        let mut resp =
+            r.send().await.map_err(|e| if e.is_timeout() { "timed out".to_string() } else { e.to_string() })?;
+        let status = resp.status().as_u16();
+        let content_type = resp.headers().get("content-type").and_then(|v| v.to_str().ok()).unwrap_or("").to_string();
+        let mut bytes: Vec<u8> = vec![];
+        while bytes.len() < max_bytes {
+            match resp.chunk().await {
+                Ok(Some(chunk)) => bytes.extend_from_slice(&chunk),
+                Ok(None) => break,
+                Err(e) => return Err(e.to_string()),
+            }
+        }
+        bytes.truncate(max_bytes);
+        Ok(Page { status, content_type, body: String::from_utf8_lossy(&bytes).into_owned() })
+    }
+}
+
 impl Default for Http {
     fn default() -> Self {
         Http::real()
