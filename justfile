@@ -5,6 +5,7 @@ set shell := ["bash", "-euo", "pipefail", "-c"]
 set windows-shell := ["bash.exe", "-euo", "pipefail", "-c"]
 
 dev_dir := justfile_directory() / ".kizn-dev"
+demo_dir := justfile_directory() / ".kizn-demo"
 exe := if os() == "windows" { ".exe" } else { "" }
 bridge := justfile_directory() / "target/debug/kizn-bridge" + exe
 toolchain := `sed -n 's/^channel *= *"\(.*\)"/\1/p' rust-toolchain.toml`
@@ -81,17 +82,20 @@ doctor:
 dev *args:
     #!/usr/bin/env bash
     set -euo pipefail
-    mock=0; tailnet=0; paused=0
+    mock=0; tailnet=0; paused=0; days=0
     for a in {{ args }}; do
       case "$a" in
         mock) mock=1 ;;
         tailnet) tailnet=1 ;;
         paused) paused=1 ;;
-        *) echo "just dev: unknown option '$a' (mock, tailnet, paused)"; exit 2 ;;
+        days=*) days="${a#days=}" ;;
+        *) echo "just dev: unknown option '$a' (mock, tailnet, paused, days=N)"; exit 2 ;;
       esac
     done
+    # `just demo` runs this against its own data dir.
+    data="${KIZN_DEV_DIR:-{{ dev_dir }}}"
     cargo build -q -p kizn-bridge
-    mkdir -p "{{ dev_dir }}"
+    mkdir -p "$data"
     pids=()
     cleanup() {
       trap - EXIT INT TERM
@@ -102,7 +106,8 @@ dev *args:
     trap cleanup EXIT INT TERM
     # mock: model traffic goes to the fake model server (127.0.0.1:7880), keys stay in memory.
     # paused: the bank writer holds still, so seeded states stay as seeded.
-    KIZN_BANK_PAUSED=$paused KIZN_MOCK=$mock KIZN_DATA_DIR="{{ dev_dir }}" KIZN_CONFIG_DIR="{{ dev_dir }}" "{{ bridge }}" &
+    # days=N: the clock runs N days ahead, to walk a week of practice.
+    KIZN_DAYS_LATER=$days KIZN_BANK_PAUSED=$paused KIZN_MOCK=$mock KIZN_DATA_DIR="$data" KIZN_CONFIG_DIR="$data" "{{ bridge }}" &
     pids+=($!)
     if [[ $tailnet == 1 ]]; then
       # Tailnet only. Never `tailscale funnel`, which is public.
@@ -115,6 +120,27 @@ dev *args:
     pids+=($!)
     # Whichever stops first (or Ctrl-C) takes the other down with it.
     wait -n
+
+# A sandbox with a mocked topic, ready to practise (./.kizn-demo; never touches .kizn-dev): fresh, tailnet, days=N
+demo *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    fresh=0; pass=()
+    for a in {{ args }}; do
+      case "$a" in
+        fresh) fresh=1 ;;
+        *) pass+=("$a") ;;
+      esac
+    done
+    if [[ $fresh == 1 ]]; then rm -rf "{{ demo_dir }}"; echo "demo: starting fresh"; fi
+    if [[ ! -f "{{ demo_dir }}/kizn.db" ]]; then
+      cargo build -q -p kizn-bridge
+      mkdir -p "{{ demo_dir }}"
+      sed 's|{{{{FAKE}}|http://127.0.0.1:7880|g' tests/fixtures/topic-with-bank/config.toml > "{{ demo_dir }}/config.toml"
+      KIZN_DATA_DIR="{{ demo_dir }}" KIZN_CONFIG_DIR="{{ demo_dir }}" "{{ bridge }}" seed tests/fixtures/topic-with-bank/seed.sql
+      echo "demo: seeded topic-with-bank"
+    fi
+    KIZN_DEV_DIR="{{ demo_dir }}" just dev mock "${pass[@]}"
 
 # Remove the Tailscale serve mapping `just dev tailnet` adds (only that one)
 dev-unserve:
