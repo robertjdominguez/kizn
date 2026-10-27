@@ -302,7 +302,20 @@ impl Ctx {
         );
 
         let batch = self.id();
-        self.store.start_batch(&batch, &o.id, &author.provider, &self.now()).map_err(db)?;
+        // The learner comes first: the batch starts only while the tutor isn't
+        // answering on these models, checked and started under the lock that
+        // registers a tutor reply, so a question can't slip in between.
+        let providers = [author.provider.as_str(), checker.provider.as_str()];
+        loop {
+            {
+                let tutoring = self.tutoring.lock().unwrap();
+                if !tutoring.values().any(|p| providers.contains(&p.as_str())) {
+                    self.store.start_batch(&batch, &o.id, &author.provider, &self.now()).map_err(db)?;
+                    break;
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
         let mut counts = BatchCounts { asked: count as i64, ..Default::default() };
         let written = author.client.complete_json(WRITE_ITEMS, &ask, &items_schema(), author.mode).await;
         let (reply, usage) = match written {

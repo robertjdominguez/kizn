@@ -964,7 +964,11 @@ async fn confirm_a_topic(w: &mut Kizn) {
 
 #[then("practice is available once every concept on the first outcome has one question")]
 async fn practice_available_early(w: &mut Kizn) {
-    let t = w.wait_for("the first set to be ready", |t| t.can_practise).await;
+    w.wait_for("the first set to be ready", |t| t.can_practise).await;
+    // Read again: the view counts slots a moment before it decides practice
+    // can start, and questions only ever get added.
+    let topic_id = w.topic_id();
+    let t = w.topic_from(Command::GetTopic { topic_id }).await;
     let first = &t.outcomes[0];
     let recall: Vec<_> = first.slots.iter().filter(|s| s.kind == "recall").collect();
     assert!(recall.iter().all(|s| s.have >= 1), "a concept on outcome 1 without a question: {recall:#?}");
