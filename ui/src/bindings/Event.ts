@@ -3,4 +3,4 @@
 /**
  * Pushed to the UI (SSE in the browser loop, Tauri events in the window).
  */
-export type Event = { "type": "config_changed" } | { "type": "topic_changed", topic_id: string, };
+export type Event = { "type": "config_changed" } | { "type": "topic_changed", topic_id: string, } | { "type": "tutor_delta", thread_id: string, text: string, } | { "type": "tutor_done", thread_id: string, error: string | null, };

@@ -44,6 +44,11 @@ struct Kizn {
     practice_took: std::time::Duration,
     clock: Arc<FakeClock>,
     concept: Option<kizn_app::ConceptPageView>,
+    thread: Option<kizn_app::ThreadView>,
+    threads: Vec<kizn_app::ThreadSummary>,
+    deltas: usize,
+    /// Progress and answers before something that mustn't move them.
+    progress_before: Option<String>,
 }
 
 impl std::fmt::Debug for Kizn {
@@ -73,6 +78,10 @@ impl Kizn {
             practice_took: std::time::Duration::ZERO,
             clock: Arc::new(FakeClock::at(Utc.with_ymd_and_hms(2026, 10, 25, 9, 0, 0).unwrap())),
             concept: None,
+            thread: None,
+            threads: vec![],
+            deltas: 0,
+            progress_before: None,
         }
     }
 
@@ -119,6 +128,20 @@ impl Kizn {
         self.practice_took += started.elapsed();
         self.answers.push(a.clone());
         a
+    }
+
+    /// Everything countable about the topic, as text: concept states, recall
+    /// dates, answers and whether any is disputed.
+    async fn progress_snapshot(&mut self) -> String {
+        let topic_id = self.topic_id();
+        let p = match self.command(Command::GetProgress { topic_id }).await {
+            Ok(Reply::Progress(p)) => p,
+            other => panic!("expected Progress, got {other:?}"),
+        };
+        let attempts = self.store().attempts(None).unwrap();
+        let states: Vec<(String, Option<String>, i64)> =
+            p.outcomes.iter().flat_map(|o| &o.concepts).map(|c| (c.state.clone(), c.due.clone(), c.answers)).collect();
+        format!("{states:?}{attempts:?}")
     }
 
     async fn read_summary(&mut self) -> SummaryView {
@@ -1162,6 +1185,107 @@ async fn replacement_written(w: &mut Kizn) {
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     }
     panic!("no replacement written for the disputed question's slot");
+}
+
+// --- Ask about this --------------------------------------------------------------
+
+impl Kizn {
+    fn card_anchor(&self) -> kizn_app::Anchor {
+        kizn_app::Anchor::Card { item_id: self.deck.as_ref().unwrap().cards[0].item_id.clone() }
+    }
+
+    /// Asks and waits for the whole reply; returns the deltas seen.
+    async fn ask(&mut self, text: &str, new: bool) -> (kizn_app::ThreadView, usize) {
+        let mut rx = self.app().subscribe();
+        let anchor = self.card_anchor();
+        let thread_id = if new { None } else { self.thread.as_ref().map(|t| t.id.clone()) };
+        let started = match self.command(Command::Ask { anchor, thread_id, text: text.into() }).await {
+            Ok(Reply::Thread(t)) => t,
+            other => panic!("expected a Thread, got {other:?}"),
+        };
+        let mut deltas = 0;
+        loop {
+            match tokio::time::timeout(std::time::Duration::from_secs(10), rx.recv()).await {
+                Ok(Ok(Event::TutorDelta { thread_id, .. })) if thread_id == started.id => deltas += 1,
+                Ok(Ok(Event::TutorDone { thread_id, error })) if thread_id == started.id => {
+                    assert!(error.is_none(), "the tutor failed: {error:?}");
+                    break;
+                }
+                Ok(Ok(_)) | Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => {}
+                other => panic!("no reply from the tutor: {other:?}"),
+            }
+        }
+        let t = match self.command(Command::GetThread { thread_id: started.id.clone() }).await {
+            Ok(Reply::Thread(t)) => t,
+            other => panic!("expected a Thread, got {other:?}"),
+        };
+        self.thread = Some(t.clone());
+        (t, deltas)
+    }
+}
+
+#[when(expr = "I ask about it {string}")]
+async fn ask_about_it(w: &mut Kizn, text: String) {
+    let before = w.progress_snapshot().await;
+    w.progress_before = Some(before);
+    let (_, deltas) = w.ask(&text, true).await;
+    w.deltas = deltas;
+}
+
+#[when(expr = "I ask about it again in a new conversation {string}")]
+async fn ask_again_new(w: &mut Kizn, text: String) {
+    w.ask(&text, true).await;
+}
+
+#[then("the tutor's reply streams in, about my pick and the key")]
+fn reply_streams(w: &mut Kizn) {
+    assert!(w.deltas > 3, "the reply arrived in {} pieces", w.deltas);
+    let t = w.thread.as_ref().unwrap();
+    assert_eq!(t.messages.len(), 2);
+    assert_eq!(t.messages[0].role, "learner");
+    let reply = &t.messages[1].text;
+    let key = w.stored_options(&w.deck.as_ref().unwrap().cards[0].item_id).into_iter().find(|o| o.correct).unwrap();
+    assert!(reply.contains("You picked") && reply.contains(&key.text) && reply.contains(&key.why), "{reply}");
+}
+
+#[then("the conversation is kept with the card")]
+async fn kept_with_card(w: &mut Kizn) {
+    let anchor = w.card_anchor();
+    match w.command(Command::GetThreads { anchor }).await {
+        Ok(Reply::Threads(ts)) => {
+            assert_eq!(ts.len(), 1);
+            assert_eq!(ts[0].messages, 2);
+        }
+        other => panic!("expected Threads, got {other:?}"),
+    }
+}
+
+#[then("no answer, concept state or recall date changes")]
+async fn nothing_moved(w: &mut Kizn) {
+    let now = w.progress_snapshot().await;
+    assert_eq!(Some(now), w.progress_before, "the tutor moved something");
+}
+
+#[then(expr = "the card shows {int} conversations")]
+async fn card_conversations(w: &mut Kizn, n: usize) {
+    let anchor = w.card_anchor();
+    match w.command(Command::GetThreads { anchor }).await {
+        Ok(Reply::Threads(ts)) => {
+            assert_eq!(ts.len(), n);
+            w.threads = ts;
+        }
+        other => panic!("expected Threads, got {other:?}"),
+    }
+}
+
+#[then("I can reopen either")]
+async fn reopen_either(w: &mut Kizn) {
+    for t in w.threads.clone() {
+        match w.command(Command::GetThread { thread_id: t.id.clone() }).await {
+            Ok(Reply::Thread(v)) => assert_eq!((v.messages.len(), v.title.as_str()), (2, t.title.as_str())),
+            other => panic!("expected a Thread, got {other:?}"),
+        }
+    }
 }
 
 #[tokio::main]

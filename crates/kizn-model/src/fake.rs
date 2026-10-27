@@ -244,6 +244,29 @@ fn error(status: StatusCode, message: &str) -> Response {
     (status, axum::Json(json!({"error": {"message": message}}))).into_response()
 }
 
+/// What a streamed reply says, word by word: a task's "text" (the tutor), or
+/// "kizn works." (the probe).
+fn streamed_words(answer: Option<&Value>) -> Vec<String> {
+    match answer.and_then(|a| a["text"].as_str()) {
+        Some(text) => text.split_inclusive(' ').map(str::to_string).collect(),
+        None => vec!["kizn ".into(), "works.".into()],
+    }
+}
+
+/// Server-sent events, a little apart when `paced` (so a streamed reply
+/// arrives word by word, as a real model's does).
+fn sse_paced(events: Vec<String>, paced: bool) -> Response {
+    if !paced {
+        return sse(events);
+    }
+    use futures_util::StreamExt;
+    let stream = futures_util::stream::iter(events).then(|e| async move {
+        tokio::time::sleep(std::time::Duration::from_millis(12)).await;
+        Ok::<_, std::convert::Infallible>(Bytes::from(format!("data: {e}\n\n")))
+    });
+    Response::builder().header(header::CONTENT_TYPE, "text/event-stream").body(Body::from_stream(stream)).unwrap()
+}
+
 fn sse(events: Vec<String>) -> Response {
     let body: String = events.into_iter().map(|e| format!("data: {e}\n\n")).collect();
     Response::builder().header(header::CONTENT_TYPE, "text/event-stream").body(Body::from(body)).unwrap()
@@ -265,10 +288,11 @@ fn openai(b: Behaviour, req: &Value, answer: Option<Value>) -> Response {
         if b == Behaviour::NoStream {
             return error(StatusCode::INTERNAL_SERVER_ERROR, "streaming is broken here");
         }
+        let words = streamed_words(answer.as_ref());
         let mut events: Vec<String> =
-            ["kizn ", "works."].iter().map(|t| json!({"choices": [{"delta": {"content": t}}]}).to_string()).collect();
+            words.iter().map(|t| json!({"choices": [{"delta": {"content": t}}]}).to_string()).collect();
         events.push("[DONE]".into());
-        return sse(events);
+        return sse_paced(events, words.len() > 2);
     }
     let schema = !req["response_format"].is_null();
     let answer = answer.map(|a| a.to_string()).unwrap_or_else(|| ANSWER.to_string());
@@ -297,12 +321,13 @@ fn anthropic(b: Behaviour, req: &Value, answer: Option<Value>) -> Response {
         if b == Behaviour::NoStream {
             return error(StatusCode::INTERNAL_SERVER_ERROR, "streaming is broken here");
         }
+        let words = streamed_words(answer.as_ref());
         let mut events = vec![json!({"type": "message_start"}).to_string()];
-        for t in ["kizn ", "works."] {
+        for t in &words {
             events.push(json!({"type": "content_block_delta", "delta": {"type": "text_delta", "text": t}}).to_string());
         }
         events.push(json!({"type": "message_stop"}).to_string());
-        return sse(events);
+        return sse_paced(events, words.len() > 2);
     }
     let tools = !req["tools"].is_null();
     let answer = answer.unwrap_or_else(|| json!({"ok": true, "word": "kizn"}));
@@ -473,6 +498,21 @@ impl FakeServer {
                     })
                     .collect();
                 Some(json!({ "items": items }))
+            }
+            "tutor" => {
+                // Grounded in the anchor, so a test can see it was loaded.
+                let anchor = &input["anchor"];
+                let text = match anchor["kind"].as_str() {
+                    Some("card") => format!(
+                        "You picked {}. The key is {}: {} You asked: {}",
+                        anchor["picked"].as_str().unwrap_or("?"),
+                        anchor["key"].as_str().unwrap_or("?"),
+                        anchor["key_why"].as_str().unwrap_or(""),
+                        s("question"),
+                    ),
+                    _ => format!("About {}: you asked {}", anchor["title"].as_str().unwrap_or("this"), s("question")),
+                };
+                Some(json!({ "text": text }))
             }
             "suggest-sources" => {
                 // Two real pages around a dead link and an app shell: kizn

@@ -423,3 +423,59 @@ Then("my answer still counts", async ({ page, world }) => {
   );
   expect(a.disputed_at).toBeNull();
 });
+
+// ---- ask about this ----------------------------------------------------------------
+
+const tutor = (page: Page) => page.getByRole("dialog", { name: "Ask about this" });
+
+async function askInSheet(page: Page, text: string) {
+  const box = tutor(page).getByLabel("Your question");
+  await box.fill(text);
+  await box.press("Enter");
+  // The reply is in once the box can ask again.
+  await expect(tutor(page).getByLabel("The tutor's reply").last()).toContainText("You picked", { timeout: 15_000 });
+}
+
+When("I ask about it {string}", async ({ page }, text: string) => {
+  await page.getByRole("button", { name: /Ask about this/ }).click();
+  await expect(tutor(page)).toBeVisible();
+  await askInSheet(page, text);
+});
+
+When("I ask about it again in a new conversation {string}", async ({ page }, text: string) => {
+  await tutor(page).getByRole("button", { name: "New conversation" }).click();
+  await askInSheet(page, text);
+});
+
+Then("the tutor's reply streams in, about my pick and the key", async ({ page, world }) => {
+  const card = (world as PracticeWorld).deck?.cards[0];
+  if (!card) throw new Error("no card");
+  const key = optionsOf(world, card.item_id).find((o) => o.correct);
+  const reply = tutor(page).getByLabel("The tutor's reply").last();
+  await expect(reply).toContainText(key?.text ?? "");
+  await expect(reply).toContainText(key?.why ?? "");
+});
+
+Then("the conversation is kept with the card", async ({ page }) => {
+  await page.keyboard.press("Escape");
+  await expect(tutor(page)).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /Ask about this · 1 conversation$/ })).toBeVisible();
+});
+
+Then("the card shows {int} conversations", async ({ page }, n: number) => {
+  await page.keyboard.press("Escape");
+  await expect(tutor(page)).toHaveCount(0);
+  await expect(page.getByRole("button", { name: new RegExp(`Ask about this · ${n} conversations$`) })).toBeVisible();
+});
+
+Then("I can reopen either", async ({ page }) => {
+  await page.getByRole("button", { name: /Ask about this/ }).click();
+  const earlier = tutor(page).getByRole("region", { name: "Earlier conversations" });
+  await expect(earlier).toContainText("Earlier · 2 conversations");
+  for (const [i, title] of ["Why is the key right?", "Give me an example"].entries()) {
+    // Back to the list (it shows while no conversation is open).
+    if (i > 0) await tutor(page).getByRole("button", { name: "New conversation" }).click();
+    await earlier.getByRole("button", { name: title }).click();
+    await expect(tutor(page).getByLabel("The tutor's reply")).toContainText("You picked");
+  }
+});

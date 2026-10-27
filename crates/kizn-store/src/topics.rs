@@ -79,6 +79,27 @@ pub struct AttemptRow {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ThreadRow {
+    pub id: String,
+    pub topic_id: String,
+    pub anchor_kind: String,
+    pub anchor_id: String,
+    pub title: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MessageRow {
+    pub id: String,
+    pub thread_id: String,
+    /// learner | tutor
+    pub role: String,
+    pub text: String,
+    pub at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SourceRow {
     pub id: String,
     pub concept_id: String,
@@ -459,6 +480,58 @@ impl Store {
         Ok(item)
     }
 
+    pub fn insert_thread(&self, t: &ThreadRow) -> Result<()> {
+        self.conn.lock().unwrap().execute(
+            "INSERT INTO threads (id, topic_id, anchor_kind, anchor_id, title, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![t.id, t.topic_id, t.anchor_kind, t.anchor_id, t.title, t.created_at, t.updated_at],
+        )?;
+        Ok(())
+    }
+
+    pub fn thread(&self, id: &str) -> Result<Option<ThreadRow>> {
+        let conn = self.conn.lock().unwrap();
+        Ok(conn
+            .query_row(
+                "SELECT id, topic_id, anchor_kind, anchor_id, title, created_at, updated_at FROM threads WHERE id = ?1",
+                [id],
+                thread,
+            )
+            .optional()?)
+    }
+
+    /// An anchor's conversations, newest first.
+    pub fn threads(&self, anchor_kind: &str, anchor_id: &str) -> Result<Vec<ThreadRow>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, topic_id, anchor_kind, anchor_id, title, created_at, updated_at FROM threads
+             WHERE anchor_kind = ?1 AND anchor_id = ?2 ORDER BY updated_at DESC, id DESC",
+        )?;
+        let rows = stmt.query_map([anchor_kind, anchor_id], thread)?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Adds a message and touches its thread.
+    pub fn add_message(&self, m: &MessageRow) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO messages (id, thread_id, role, text, at) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![m.id, m.thread_id, m.role, m.text, m.at],
+        )?;
+        conn.execute("UPDATE threads SET updated_at = ?2 WHERE id = ?1", params![m.thread_id, m.at])?;
+        Ok(())
+    }
+
+    pub fn messages(&self, thread_id: &str) -> Result<Vec<MessageRow>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt =
+            conn.prepare("SELECT id, thread_id, role, text, at FROM messages WHERE thread_id = ?1 ORDER BY at, rowid")?;
+        let rows = stmt.query_map([thread_id], |r| {
+            Ok(MessageRow { id: r.get(0)?, thread_id: r.get(1)?, role: r.get(2)?, text: r.get(3)?, at: r.get(4)? })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
     pub fn mark_studied(&self, concept_id: &str, at: &str) -> Result<()> {
         self.conn.lock().unwrap().execute(
             "INSERT INTO studied (concept_id, at) VALUES (?1, ?2) ON CONFLICT (concept_id) DO UPDATE SET at = ?2",
@@ -515,6 +588,18 @@ impl Store {
         )?;
         Ok(stmt.query_map(params![outcome_id, n], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?)
     }
+}
+
+fn thread(r: &rusqlite::Row) -> rusqlite::Result<ThreadRow> {
+    Ok(ThreadRow {
+        id: r.get(0)?,
+        topic_id: r.get(1)?,
+        anchor_kind: r.get(2)?,
+        anchor_id: r.get(3)?,
+        title: r.get(4)?,
+        created_at: r.get(5)?,
+        updated_at: r.get(6)?,
+    })
 }
 
 #[cfg(test)]

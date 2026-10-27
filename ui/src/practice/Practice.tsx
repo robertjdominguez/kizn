@@ -1,4 +1,4 @@
-import { ArrowRight, Flag, X } from "lucide-react";
+import { ArrowRight, Flag, MessageCircle, X } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { AnswerView } from "../bindings/AnswerView";
@@ -18,6 +18,7 @@ const verdictYes = {
 };
 
 import { call } from "../rpc";
+import { type Starter, TutorSheet } from "../tutor/TutorSheet";
 import { Onboarding } from "./Onboarding";
 import { Summary } from "./Summary";
 
@@ -137,6 +138,21 @@ function Card({
   // "This key is wrong": looking again first, then set aside.
   const [confirming, setConfirming] = useState(false);
   const [disputed, setDisputed] = useState<DisputeView | null>(null);
+  // Asking the tutor about this card, and how many conversations it has.
+  const [asking, setAsking] = useState(false);
+  const [conversations, setConversations] = useState(0);
+  const countConversations = useCallback(() => {
+    call({ type: "get_threads", anchor: { kind: "card", item_id: card.item_id } })
+      .then((ts) => setConversations(ts.length))
+      .catch(() => undefined);
+  }, [card.item_id]);
+  useEffect(() => {
+    if (answer) countConversations();
+  }, [answer, countConversations]);
+  const closeAsking = useCallback(() => {
+    setAsking(false);
+    countConversations();
+  }, [countConversations]);
 
   const choose = useCallback(
     (i: number) => {
@@ -154,6 +170,8 @@ function Card({
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.metaKey || e.ctrlKey || e.altKey) return;
+      // Typing to the tutor (or anywhere in a sheet) isn't answering.
+      if (asking || (e.target instanceof HTMLElement && e.target.closest("textarea, input, [role=dialog]"))) return;
       if (answer) {
         if (e.key === "Enter") {
           e.preventDefault();
@@ -166,7 +184,7 @@ function Card({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [answer, card.options.length, choose, onNext]);
+  }, [answer, asking, card.options.length, choose, onNext]);
 
   return (
     <motion.section
@@ -310,6 +328,18 @@ function Card({
               </button>
               <span className="text-xs text-ink-4">or press Enter</span>
               <span className="flex-1" />
+              <button
+                type="button"
+                onClick={() => setAsking(true)}
+                className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-ink-3 transition-colors hover:bg-raised hover:text-ink"
+              >
+                <MessageCircle size={12} aria-hidden /> Ask about this
+                {conversations > 0 && (
+                  <span className="text-ink-4">
+                    · {conversations} {conversations === 1 ? "conversation" : "conversations"}
+                  </span>
+                )}
+              </button>
               {!disputed && !confirming && (
                 <button
                   type="button"
@@ -323,7 +353,48 @@ function Card({
           </motion.div>
         )}
       </AnimatePresence>
+      {answer && (
+        <TutorSheet
+          anchor={asking ? { kind: "card", item_id: card.item_id } : null}
+          context={<CardContext card={card} answer={answer} />}
+          starters={starters(answer)}
+          onClose={closeAsking}
+        />
+      )}
     </motion.section>
+  );
+}
+
+// What a conversation about a card starts from: kizn writes these; the
+// self-explanation one is put in the box for the learner to finish.
+function starters(answer: AnswerView): Starter[] {
+  const key = LETTERS[answer.key];
+  const pick = LETTERS[answer.picked];
+  return answer.correct
+    ? [
+        { label: `Why is ${key} right?` },
+        { label: "Why are the others wrong?" },
+        { label: "Explain it another way" },
+        { label: "Give me an example" },
+      ]
+    : [
+        { label: "What's wrong with my pick?" },
+        { label: `Why is ${key} right?` },
+        { label: `I picked ${pick} because`, prefill: true },
+        { label: "Explain it another way" },
+        { label: "Give me an example" },
+      ];
+}
+
+function CardContext({ card, answer }: { card: CardView; answer: AnswerView }) {
+  return (
+    <div className="flex flex-col gap-1.5">
+      <p className="line-clamp-3 text-sm text-ink">{card.stem}</p>
+      <p>
+        You picked <span className="text-ink-2">{LETTERS[answer.picked]}</span> · kizn's key is{" "}
+        <span className="text-ink-2">{LETTERS[answer.key]}</span>
+      </p>
+    </div>
   );
 }
 

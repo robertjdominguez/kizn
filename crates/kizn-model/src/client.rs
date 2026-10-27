@@ -91,6 +91,13 @@ impl Http {
     }
 }
 
+/// Who said a turn of a conversation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Turn {
+    User,
+    Assistant,
+}
+
 /// A page fetched for checking: what came back, the body cut at a cap.
 #[derive(Debug, Clone)]
 pub struct Page {
@@ -318,22 +325,35 @@ impl Client {
         system: &str,
         user: &str,
     ) -> Result<impl Stream<Item = Result<String, ModelError>> + use<>, ModelError> {
+        self.stream_chat(system, &[(Turn::User, user.to_string())]).await
+    }
+
+    /// A conversation's next reply, streamed delta by delta. `turns` alternate
+    /// and end with the user's.
+    pub async fn stream_chat(
+        &self,
+        system: &str,
+        turns: &[(Turn, String)],
+    ) -> Result<impl Stream<Item = Result<String, ModelError>> + use<>, ModelError> {
+        let messages: Vec<Value> = turns
+            .iter()
+            .map(|(who, text)| {
+                json!({"role": match who { Turn::User => "user", Turn::Assistant => "assistant" }, "content": text})
+            })
+            .collect();
         let (path, body) = match self.endpoint.protocol {
-            Protocol::OpenAi => (
-                "chat/completions",
-                json!({
-                    "model": self.endpoint.model,
-                    "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
-                    "stream": true,
-                }),
-            ),
+            Protocol::OpenAi => {
+                let mut all = vec![json!({"role": "system", "content": system})];
+                all.extend(messages);
+                ("chat/completions", json!({ "model": self.endpoint.model, "messages": all, "stream": true }))
+            }
             Protocol::Anthropic => (
                 "messages",
                 json!({
                     "model": self.endpoint.model,
-                    "max_tokens": 1024,
+                    "max_tokens": 1500,
                     "system": system,
-                    "messages": [{"role": "user", "content": user}],
+                    "messages": messages,
                     "stream": true,
                 }),
             ),

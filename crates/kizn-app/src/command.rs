@@ -109,6 +109,21 @@ pub enum Command {
     Dispute {
         attempt_id: String,
     },
+    /// Asks the tutor about an anchor: a new conversation, or `thread_id`'s.
+    /// The reply streams as events.
+    Ask {
+        anchor: Anchor,
+        #[ts(optional)]
+        thread_id: Option<String>,
+        text: String,
+    },
+    /// An anchor's conversations, newest first.
+    GetThreads {
+        anchor: Anchor,
+    },
+    GetThread {
+        thread_id: String,
+    },
 }
 
 /// A draft as the learner shaped it.
@@ -146,6 +161,8 @@ pub enum Reply {
     Progress(ProgressView),
     Concept(ConceptPageView),
     Disputed(DisputeView),
+    Thread(ThreadView),
+    Threads(Vec<ThreadSummary>),
 }
 
 /// After a dispute: each concept the question named, back where it was
@@ -572,6 +589,54 @@ pub enum Event {
     ConfigChanged,
     /// A topic's draft or bank moved on: refetch it.
     TopicChanged { topic_id: String },
+    /// More of the tutor's reply.
+    TutorDelta { thread_id: String, text: String },
+    /// The tutor's reply is finished (and kept), or failed.
+    TutorDone { thread_id: String, error: Option<String> },
+}
+
+/// What a conversation with the tutor is about.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+#[ts(export)]
+pub enum Anchor {
+    /// A practice question (as the learner last answered it).
+    Card {
+        item_id: String,
+    },
+    Concept {
+        concept_id: String,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct ThreadView {
+    pub id: String,
+    /// The first question.
+    pub title: String,
+    pub anchor: Anchor,
+    pub messages: Vec<MessageView>,
+    /// The tutor is answering now (follow TutorDelta / TutorDone).
+    pub streaming: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct MessageView {
+    /// "learner" or "tutor".
+    pub role: String,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct ThreadSummary {
+    pub id: String,
+    pub title: String,
+    #[ts(type = "number")]
+    pub messages: i64,
+    pub updated_at: String,
 }
 
 /// The home screen.
