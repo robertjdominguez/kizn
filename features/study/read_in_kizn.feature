@@ -44,3 +44,9 @@ Feature: Read in kizn
     Given a concept with a verified page
     When I add "https://app.example.com/web/shell" to it
     Then I'm told it couldn't be read, and why
+
+  @domain
+  Scenario: Questions cite the resources
+    Given a concept with a verified page
+    When a question about it is replaced
+    Then the new question cites one of its resources

@@ -131,6 +131,9 @@ pub enum Command {
         #[ts(optional)]
         thread_id: Option<String>,
         text: String,
+        /// A passage (or a video's moment) the question is about.
+        #[ts(optional)]
+        passage: Option<String>,
     },
     /// An anchor's conversations, newest first.
     GetThreads {
@@ -669,6 +672,10 @@ pub enum Anchor {
     },
     Concept {
         concept_id: String,
+    },
+    /// A resource (a page or a video) kizn holds as text.
+    Resource {
+        source_id: String,
     },
 }
 

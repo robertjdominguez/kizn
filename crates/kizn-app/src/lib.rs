@@ -73,8 +73,9 @@ pub struct Ctx {
     events: broadcast::Sender<Event>,
     /// Concepts whose sources are being looked for right now.
     sourcing: Arc<Mutex<std::collections::HashSet<String>>>,
-    /// Conversations the tutor is answering right now.
-    tutoring: Arc<Mutex<std::collections::HashSet<String>>>,
+    /// Conversations the tutor is answering right now, and the provider
+    /// answering each (the bank writer waits for it on the same one).
+    tutoring: Arc<Mutex<HashMap<String, String>>>,
 }
 
 pub struct App {
@@ -197,8 +198,8 @@ impl App {
             Command::GetResource { source_id } => self.resource(&source_id).await.map(Reply::Resource),
             Command::SaveNote { concept_id, text } => self.save_note(&concept_id, &text).map(Reply::Note),
             Command::AddSource { concept_id, url } => self.add_source(&concept_id, &url).await.map(Reply::Concept),
-            Command::Ask { anchor, thread_id, text } => {
-                self.ask(&anchor, thread_id.as_deref(), &text).map(Reply::Thread)
+            Command::Ask { anchor, thread_id, text, passage } => {
+                self.ask(&anchor, thread_id.as_deref(), &text, passage.as_deref()).map(Reply::Thread)
             }
             Command::GetThreads { anchor } => self.threads(&anchor).map(Reply::Threads),
             Command::GetThread { thread_id } => self.get_thread(&thread_id).map(Reply::Thread),

@@ -503,6 +503,8 @@ impl FakeServer {
                     Some(c) => vec![c.to_string()],
                     None => concepts.iter().take(2).cloned().collect(),
                 };
+                // Written from a resource when one is given: cite it.
+                let cite = input["resources"][0]["title"].as_str();
                 let items: Vec<Value> = (0..count)
                     .map(|i| {
                         let n = self.next();
@@ -512,8 +514,8 @@ impl FakeServer {
                                 "concepts": named,
                                 "stem": format!("Explain {about} to {} who {}.", AUDIENCES[n % AUDIENCES.len()], SITUATIONS[(n / AUDIENCES.len()) % SITUATIONS.len()]),
                                 "exemplar": format!("A strong answer names {about}, says why it matters in practice, and gives one concrete example."),
-                                "source": "",
-                                "model_knowledge": true,
+                                "source": cite.unwrap_or(""),
+                                "model_knowledge": cite.is_none(),
                             });
                         }
                         let stem = format!(
@@ -536,8 +538,8 @@ impl FakeServer {
                                 {"text": "This only applies on the first run", "correct": false, "why": "nothing limits it to the first run", "misconception": "it happens once", "foundation": "none"},
                                 {"text": "This depends on the host's clock", "correct": false, "why": "time plays no part here", "misconception": "it is time-based", "foundation": "none"},
                             ],
-                            "source": "",
-                            "model_knowledge": true,
+                            "source": cite.unwrap_or(""),
+                            "model_knowledge": cite.is_none(),
                         })
                     })
                     .collect();
@@ -554,7 +556,29 @@ impl FakeServer {
                         anchor["key_why"].as_str().unwrap_or(""),
                         s("question"),
                     ),
-                    _ => format!("About {}: you asked {}", anchor["title"].as_str().unwrap_or("this"), s("question")),
+                    Some("resource") => {
+                        let excerpt = &anchor["excerpts"][0];
+                        format!(
+                            "About {}: you asked {}.{} From it{}: {}",
+                            anchor["title"].as_str().unwrap_or("this"),
+                            s("question"),
+                            input["passage"].as_str().map(|p| format!(" On \"{p}\".")).unwrap_or_default(),
+                            excerpt["at"].as_str().map(|at| format!(" at {at}")).unwrap_or_default(),
+                            excerpt["text"].as_str().unwrap_or("").chars().take(80).collect::<String>(),
+                        )
+                    }
+                    _ => format!(
+                        "About {}: you asked {}. From {}: {}",
+                        anchor["title"].as_str().unwrap_or("this"),
+                        s("question"),
+                        anchor["resources"][0]["title"].as_str().unwrap_or("my own knowledge"),
+                        anchor["resources"][0]["excerpts"][0]["text"]
+                            .as_str()
+                            .unwrap_or("")
+                            .chars()
+                            .take(80)
+                            .collect::<String>(),
+                    ),
                 };
                 Some(json!({ "text": text }))
             }

@@ -3,4 +3,4 @@
 /**
  * What a conversation with the tutor is about.
  */
-export type Anchor = { "kind": "card", item_id: string, } | { "kind": "concept", concept_id: string, };
+export type Anchor = { "kind": "card", item_id: string, } | { "kind": "concept", concept_id: string, } | { "kind": "resource", source_id: string, };

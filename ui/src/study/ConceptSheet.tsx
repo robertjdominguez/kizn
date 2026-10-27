@@ -1,4 +1,4 @@
-import { Check, ExternalLink, FileText, LoaderCircle, Play, Plus, RotateCw, X } from "lucide-react";
+import { Check, ExternalLink, FileText, LoaderCircle, MessageCircle, Play, Plus, RotateCw, X } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ConceptPageView } from "../bindings/ConceptPageView";
@@ -9,6 +9,8 @@ import { openExternal } from "../external";
 import { bead, EASE, fade, GLIDE, pop, presence, stage } from "../motion";
 import { whenDue } from "../practice/Summary";
 import { call } from "../rpc";
+import { TutorSheet } from "../tutor/TutorSheet";
+import { conversations, useConversations } from "../tutor/useConversations";
 import { Reader } from "./Reader";
 
 // A concept to learn, sliding in over whatever opened it (the summary): the
@@ -49,8 +51,11 @@ function Sheet({ conceptId, onClose }: { conceptId: string; onClose: () => void 
   const [busy, setBusy] = useState(false);
   // A resource open in the reader, over the sheet.
   const [reading, setReading] = useState<string | null>(null);
+  // Asking the tutor about the concept, over the sheet.
+  const [asking, setAsking] = useState(false);
+  const [talks, recount] = useConversations({ kind: "concept", concept_id: conceptId });
   const readingNow = useRef<string | null>(null);
-  readingNow.current = reading;
+  readingNow.current = reading ?? (asking ? "asking" : null);
 
   const load = useCallback(() => {
     call({ type: "get_concept", concept_id: conceptId })
@@ -117,6 +122,16 @@ function Sheet({ conceptId, onClose }: { conceptId: string; onClose: () => void 
               <h2 id="concept-title" className="text-base font-semibold leading-snug text-ink">
                 {c.statement}
               </h2>
+            </motion.div>
+            <motion.div variants={pop}>
+              <button
+                type="button"
+                onClick={() => setAsking(true)}
+                className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-ink-3 ring-1 ring-hairline transition-colors hover:bg-raised hover:text-ink"
+              >
+                <MessageCircle size={12} aria-hidden /> Ask about this concept
+                <span className="text-ink-4">{conversations(talks)}</span>
+              </button>
             </motion.div>
             <motion.section variants={pop} aria-labelledby="sources-title" className="flex flex-col gap-2">
               <h3 id="sources-title" className="text-[11px] font-semibold uppercase tracking-wide text-ink-3">
@@ -235,6 +250,21 @@ function Sheet({ conceptId, onClose }: { conceptId: string; onClose: () => void 
           {when && <span className="text-xs text-ink-3">Comes back {when} either way</span>}
         </motion.div>
       )}
+      <TutorSheet
+        anchor={asking ? { kind: "concept", concept_id: conceptId } : null}
+        context={<p className="text-sm text-ink">{c?.statement}</p>}
+        starters={[
+          { label: "Explain it simply" },
+          { label: "Give me an example" },
+          { label: "What's a common mix-up?" },
+          { label: "How do I use this in practice?" },
+          { label: "Quiz me on it" },
+        ]}
+        onClose={() => {
+          setAsking(false);
+          recount();
+        }}
+      />
       <Reader sourceId={reading} onClose={closeReader} />
     </>
   );

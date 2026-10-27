@@ -428,12 +428,11 @@ Then("my answer still counts", async ({ page, world }) => {
 
 const tutor = (page: Page) => page.getByRole("dialog", { name: "Ask about this" });
 
-async function askInSheet(page: Page, text: string) {
+async function askInSheet(page: Page, text: string, replyStarts = "You picked") {
   const box = tutor(page).getByLabel("Your question");
   await box.fill(text);
   await box.press("Enter");
-  // The reply is in once the box can ask again.
-  await expect(tutor(page).getByLabel("The tutor's reply").last()).toContainText("You picked", { timeout: 15_000 });
+  await expect(tutor(page).getByLabel("The tutor's reply").last()).toContainText(replyStarts, { timeout: 15_000 });
 }
 
 When("I ask about it {string}", async ({ page }, text: string) => {
@@ -551,4 +550,61 @@ Then("the note is there", async ({ page }) => {
   await expect(sheet(page).getByRole("region", { name: "Your note" })).toContainText(
     "Layers are shared, so rebuilds are cheap.",
   );
+});
+
+// ---- asking about concepts and passages ------------------------------------------
+
+When("I ask about the concept {string}", async ({ page }, text: string) => {
+  await sheet(page)
+    .getByRole("button", { name: /Ask about this concept/ })
+    .click();
+  await expect(tutor(page)).toBeVisible();
+  await askInSheet(page, text, "About");
+});
+
+Then("the tutor's reply draws on the concept's resources", async ({ page }) => {
+  const reply = tutor(page).getByLabel("The tutor's reply").last();
+  await expect(reply).toContainText("From ");
+  await expect(reply).toContainText("This page explains");
+});
+
+Then("the concept shows {int} conversation", async ({ page }, n: number) => {
+  await page.keyboard.press("Escape");
+  await expect(tutor(page)).toHaveCount(0);
+  await expect(
+    sheet(page).getByRole("button", { name: new RegExp(`Ask about this concept · ${n} conversation`) }),
+  ).toBeVisible();
+});
+
+When("I pick a passage in the page and ask {string}", async ({ page }, text: string) => {
+  await sheet(page)
+    .getByRole("button", { name: /docs\.example\.org/ })
+    .click();
+  const article = reader(page).locator("article");
+  const para = article.locator("p", { hasText: "This page explains" }).first();
+  await expect(para).toBeVisible();
+  // Select the first paragraph with the mouse, as a learner would.
+  const box = await para.boundingBox();
+  if (!box) throw new Error("no paragraph");
+  await page.mouse.move(box.x + 2, box.y + 4);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width - 4, box.y + box.height - 4, { steps: 8 });
+  await page.mouse.up();
+  await page.getByRole("button", { name: "Ask about the selection" }).click();
+  await expect(tutor(page).locator("blockquote")).toContainText("This page explains");
+  await askInSheet(page, text, "About");
+});
+
+Then("the tutor's reply is about that passage, from the page", async ({ page }) => {
+  const reply = tutor(page).getByLabel("The tutor's reply").last();
+  await expect(reply).toContainText('On "This page explains');
+  await expect(reply).toContainText("From it:");
+});
+
+Then("the page shows {int} conversation", async ({ page }, n: number) => {
+  await page.keyboard.press("Escape");
+  await expect(tutor(page)).toHaveCount(0);
+  await expect(
+    reader(page).getByRole("button", { name: new RegExp(`Ask about this · ${n} conversation`) }),
+  ).toBeVisible();
 });

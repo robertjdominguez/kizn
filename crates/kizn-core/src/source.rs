@@ -264,6 +264,80 @@ pub fn transcript(xml: &str) -> Vec<Cue> {
         .collect()
 }
 
+// ---- Excerpts for the tutor ------------------------------------------------------
+
+/// A stretch of a resource: where it is (a timestamp for a video, empty for
+/// a page) and its text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Chunk {
+    pub at: String,
+    pub text: String,
+}
+
+/// A page's blocks in stretches of about `words` words.
+pub fn page_chunks(blocks: &[Block], words: usize) -> Vec<Chunk> {
+    let mut out: Vec<Chunk> = vec![];
+    let mut cur = String::new();
+    for b in blocks {
+        if !cur.is_empty() && WORD.find_iter(&cur).count() >= words {
+            out.push(Chunk { at: String::new(), text: std::mem::take(&mut cur) });
+        }
+        if !cur.is_empty() {
+            cur.push('\n');
+        }
+        cur.push_str(&b.text);
+    }
+    if !cur.is_empty() {
+        out.push(Chunk { at: String::new(), text: cur });
+    }
+    out
+}
+
+/// A transcript in stretches of about `seconds`, each marked with when it starts.
+pub fn cue_chunks(cues: &[Cue], seconds: f64) -> Vec<Chunk> {
+    let mut out: Vec<Chunk> = vec![];
+    let mut start = None::<f64>;
+    let mut cur: Vec<&str> = vec![];
+    for c in cues {
+        if let Some(s) = start
+            && c.start - s >= seconds
+        {
+            out.push(Chunk { at: clock(s), text: cur.join(" ") });
+            cur.clear();
+            start = None;
+        }
+        start.get_or_insert(c.start);
+        cur.push(&c.text);
+    }
+    if let Some(s) = start {
+        out.push(Chunk { at: clock(s), text: cur.join(" ") });
+    }
+    out
+}
+
+fn clock(s: f64) -> String {
+    let s = s.max(0.0) as u64;
+    format!("{}:{:02}", s / 60, s % 60)
+}
+
+/// The `k` stretches that best match a query (its key terms), in the order
+/// they come in the resource. Ties keep the earlier stretch.
+pub fn relevant(chunks: &[Chunk], query: &str, k: usize) -> Vec<Chunk> {
+    let terms = key_terms(query);
+    let mut scored: Vec<(usize, usize)> = chunks
+        .iter()
+        .enumerate()
+        .map(|(i, c)| {
+            let lower = c.text.to_lowercase();
+            (i, terms.iter().filter(|t| lower.contains(t.as_str())).count())
+        })
+        .collect();
+    scored.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    let mut keep: Vec<usize> = scored.into_iter().take(k).map(|(i, _)| i).collect();
+    keep.sort_unstable();
+    keep.into_iter().map(|i| chunks[i].clone()).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -334,6 +408,22 @@ mod tests {
             cues,
             vec![Cue { start: 1.5, text: "A tag & a digest".into() }, Cue { start: 4.0, text: "moves".into() }]
         );
+    }
+
+    #[test]
+    fn excerpts_pick_the_stretches_that_match() {
+        let blocks: Vec<Block> = ["Tomatoes like sun.", "A digest pins content.", "Tags move.", "Weather is nice."]
+            .iter()
+            .map(|t| Block { kind: "p".into(), text: t.to_string() })
+            .collect();
+        let chunks = page_chunks(&blocks, 1);
+        assert_eq!(chunks.len(), 4);
+        let got = relevant(&chunks, "why does a digest pin content but a tag move?", 2);
+        assert_eq!(got.iter().map(|c| c.text.as_str()).collect::<Vec<_>>(), ["A digest pins content.", "Tags move."]);
+        let cues: Vec<Cue> = (0..6).map(|i| Cue { start: i as f64 * 20.0, text: format!("line {i}") }).collect();
+        let video = cue_chunks(&cues, 60.0);
+        assert_eq!(video.iter().map(|c| c.at.as_str()).collect::<Vec<_>>(), ["0:00", "1:00"]);
+        assert_eq!(video[0].text, "line 0 line 1 line 2");
     }
 
     #[test]

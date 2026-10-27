@@ -19,12 +19,15 @@ export function TutorSheet({
   anchor,
   context,
   starters,
+  passage,
   onClose,
 }: {
   anchor: Anchor | null;
   /** What the conversation is about, shown on top. */
   context: ReactNode;
   starters: Starter[];
+  /** A passage (or a video's moment) the first question is about. */
+  passage?: string | null;
   onClose: () => void;
 }) {
   return (
@@ -34,7 +37,7 @@ export function TutorSheet({
           key="scrim"
           variants={fade}
           {...presence}
-          className="fixed inset-0 z-40 flex justify-end bg-crust/50"
+          className="fixed inset-0 z-[60] flex justify-end bg-crust/50"
           onClick={onClose}
         >
           <motion.aside
@@ -47,7 +50,7 @@ export function TutorSheet({
             className="flex h-full w-full max-w-lg flex-col border-l border-hairline-strong bg-subtle shadow-2xl shadow-black/40"
             onClick={(e) => e.stopPropagation()}
           >
-            <Conversation anchor={anchor} context={context} starters={starters} onClose={onClose} />
+            <Conversation anchor={anchor} context={context} starters={starters} passage={passage} onClose={onClose} />
           </motion.aside>
         </motion.div>
       )}
@@ -59,11 +62,13 @@ function Conversation({
   anchor,
   context,
   starters,
+  passage,
   onClose,
 }: {
   anchor: Anchor;
   context: ReactNode;
   starters: Starter[];
+  passage?: string | null;
   onClose: () => void;
 }) {
   const [threads, setThreads] = useState<ThreadSummary[]>([]);
@@ -127,7 +132,8 @@ function Conversation({
     setError(null);
     setDraft("");
     setPending("");
-    call({ type: "ask", anchor, thread_id: thread?.id, text: t })
+    // The passage goes with a new conversation's first question.
+    call({ type: "ask", anchor, thread_id: thread?.id, text: t, passage: thread ? undefined : (passage ?? undefined) })
       .then((th) => {
         setThread(th);
         current.current = th.id;
@@ -190,6 +196,9 @@ function Conversation({
           className="rounded-xl bg-canvas/60 px-4 py-3 text-xs text-ink-3 ring-1 ring-hairline"
         >
           {context}
+          {passage && !thread && (
+            <blockquote className="mt-2 border-l-2 border-accent/50 pl-3 text-sm text-ink-2">{passage}</blockquote>
+          )}
         </motion.div>
         {thread ? (
           <div className="flex flex-col gap-4" aria-live="polite">
@@ -294,13 +303,22 @@ function Conversation({
 
 function Message({ who, text, typing = false }: { who: string; text: string; typing?: boolean }) {
   if (who === "learner") {
+    // A question about a passage is kept as "> passage" then the question.
+    const quoted = text.startsWith("> ") ? text.slice(2).split("\n\n") : null;
     return (
       <motion.div
         initial={{ opacity: 0, y: 6 }}
         animate={{ opacity: 1, y: 0, transition: { duration: 0.2, ease: EASE } }}
-        className="ml-10 self-end rounded-2xl rounded-br-md bg-accent/12 px-3.5 py-2 text-sm text-ink"
+        className="ml-10 flex flex-col gap-1.5 self-end rounded-2xl rounded-br-md bg-accent/12 px-3.5 py-2 text-sm text-ink"
       >
-        {text}
+        {quoted ? (
+          <>
+            <blockquote className="border-l-2 border-accent/50 pl-2 text-xs text-ink-3">{quoted[0]}</blockquote>
+            <span>{quoted.slice(1).join("\n\n")}</span>
+          </>
+        ) : (
+          text
+        )}
       </motion.div>
     );
   }
