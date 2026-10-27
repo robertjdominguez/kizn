@@ -46,9 +46,19 @@ pub enum Command {
         provider: Option<String>,
     },
     /// Starts a draft from a goal; the author drafts it in the background.
+    /// From a suggested foundation, it's linked underneath the topic it was
+    /// for before drafting begins.
     StartTopic {
         title: String,
         goal: String,
+        #[serde(default)]
+        #[ts(optional)]
+        foundation: Option<String>,
+    },
+    /// What to start a suggested foundation with: its name and a goal to
+    /// edit, in the learner's words rather than kizn's.
+    FoundationPrefill {
+        suggestion_id: String,
     },
     StopDrafting {
         topic_id: String,
@@ -125,8 +135,8 @@ pub enum Command {
         order: Vec<u32>,
         chosen: u32,
     },
-    /// What to do with a foundation: "start" (a new topic underneath, set up
-    /// now), "later" (stays a suggestion) or "dismiss" ("I've got this").
+    /// What to do with a foundation: "later" (a suggestion on the map) or
+    /// "dismiss" (not needed). Starting one is StartTopic with `foundation`.
     ResolveFoundation {
         suggestion_id: String,
         action: String,
@@ -220,6 +230,7 @@ pub enum Reply {
     Settings(SettingsView),
     Models(Vec<String>),
     Topic(TopicView),
+    Prefill(PrefillView),
     Deck(DeckView),
     Answered(AnswerView),
     Summary(SummaryView),
@@ -662,6 +673,18 @@ pub struct GroundQuestion {
     pub correct: Option<bool>,
     pub key: Option<u32>,
     pub feedback: Vec<OptionFeedback>,
+}
+
+/// The start of a topic set up from a suggested foundation.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct PrefillView {
+    pub suggestion_id: String,
+    pub title: String,
+    /// A goal to edit: why it matters, from the topic it was suggested for.
+    pub goal: String,
+    /// The topic it's a foundation for.
+    pub for_title: String,
 }
 
 /// A foundation proposed for a topic.
