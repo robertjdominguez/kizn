@@ -111,7 +111,8 @@ impl Ctx {
             let mut moved = false;
             let mut eligible = vec![];
             for (o, concept_ids, items) in &data {
-                let paused = o.bank_state == "failed" && o.retry_at.as_deref().is_some_and(|r| r > now.as_str());
+                let paused = matches!(o.bank_state.as_str(), "failed" | "resting")
+                    && o.retry_at.as_deref().is_some_and(|r| r > now.as_str());
                 if paused {
                     continue;
                 }
@@ -188,9 +189,20 @@ impl Ctx {
         out
     }
 
+    /// Something the learner may need to fix (an account, a connection):
+    /// shown with its reason, and retried by itself too.
     fn fail(&self, o: &OutcomeRow, why: &str, retry_in: chrono::Duration) {
+        self.pause(o, "failed", why, retry_in);
+    }
+
+    /// Nothing usable yet, so leave it a while: nobody needs to do anything.
+    fn rest(&self, o: &OutcomeRow, why: &str, retry_in: chrono::Duration) {
+        self.pause(o, "resting", why, retry_in);
+    }
+
+    fn pause(&self, o: &OutcomeRow, state: &str, why: &str, retry_in: chrono::Duration) {
         let retry = sql_time(self.deps.clock.now() + retry_in);
-        let _ = self.store.set_bank_state(&o.id, "failed", Some(why), Some(&retry));
+        let _ = self.store.set_bank_state(&o.id, state, Some(why), Some(&retry));
         self.changed(&o.topic_id);
     }
 
@@ -213,9 +225,9 @@ impl Ctx {
                 let recent =
                     self.store.recent_batch_accepts(&o.id, EMPTY_RUNS_BEFORE_BACKOFF as i64).unwrap_or_default();
                 if recent.len() >= EMPTY_RUNS_BEFORE_BACKOFF && recent.iter().all(|n| *n == 0) {
-                    return self.fail(
+                    return self.rest(
                         o,
-                        "the author model hasn't written usable items for this outcome yet; kizn will try again later",
+                        "none of the author's questions passed kizn's checks yet",
                         chrono::Duration::hours(BACKOFF_HOURS),
                     );
                 }

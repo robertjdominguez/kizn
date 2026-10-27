@@ -414,6 +414,7 @@ impl App {
                 concepts_state: o.concepts_state,
                 bank_state: o.bank_state,
                 bank_error: o.bank_error,
+                retry_at: o.retry_at,
                 active: n,
                 concepts,
                 slots,

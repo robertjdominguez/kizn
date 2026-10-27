@@ -749,9 +749,12 @@ pub struct OutcomeView {
     pub reason: String,
     /// "pending", "drafting" or "done".
     pub concepts_state: String,
-    /// "waiting", "writing", "ready" or "failed".
+    /// "waiting", "writing", "ready", "resting" (nothing usable yet; kizn
+    /// tries again by itself) or "failed" (something may need fixing).
     pub bank_state: String,
     pub bank_error: Option<String>,
+    /// When a resting or failed outcome is tried again, in UTC.
+    pub retry_at: Option<String>,
     #[ts(type = "number")]
     pub active: i64,
     #[ts(type = "number")]

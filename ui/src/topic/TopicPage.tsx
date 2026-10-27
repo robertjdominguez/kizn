@@ -7,6 +7,7 @@ import { ConceptMark } from "../components/ConceptMark";
 import { Reveal } from "../components/Reveal";
 import { Screen } from "../components/Screen";
 import { Stage } from "../components/Stage";
+import { Tip } from "../components/Tip";
 import { subscribe } from "../events";
 import { settingsCanFix } from "../fixable";
 import { bead, EASE, pop, presence, rise, stage } from "../motion";
@@ -393,6 +394,7 @@ function Sidebar({ topic: t }: { topic: TopicView }) {
     ["unseen", count("unseen"), "not started"],
   ];
   const failed = t.outcomes.filter((o) => o.bank_state === "failed");
+  const resting = t.outcomes.filter((o) => o.bank_state === "resting");
   const when = whenDue(t.next_due_in_days);
   const pct = t.expected > 0 ? Math.min(100, (Number(t.active) / Number(t.expected)) * 100) : 0;
   return (
@@ -438,6 +440,7 @@ function Sidebar({ topic: t }: { topic: TopicView }) {
           </span>
         </div>
         <AnimatePresence initial={false}>
+          {resting.length > 0 && <Resting key="resting" outcomes={resting} />}
           {failed.map((o) => (
             <Stuck key={o.id} outcome={o} />
           ))}
@@ -448,50 +451,98 @@ function Sidebar({ topic: t }: { topic: TopicView }) {
   );
 }
 
-// Writing is stuck on an outcome: why, in plain words, and a way to try now
-// (kizn also retries by itself).
-function Stuck({ outcome: o }: { outcome: OutcomeView }) {
+// "Outcomes 3, 4 and 5".
+const outcomeList = (os: OutcomeView[]) => {
+  const ords = os.map((o) => String(o.ord));
+  const last = ords.pop();
+  return `${os.length === 1 ? "Outcome" : "Outcomes"} ${ords.length ? `${ords.join(", ")} and ${last}` : last}`;
+};
+
+// When kizn tries again, in the learner's own clock ("10:37 PM").
+const retryTime = (at: string | null) => {
+  if (!at) return null;
+  const when = new Date(`${at.replace(" ", "T")}Z`);
+  if (Number.isNaN(when.getTime()) || when.getTime() <= Date.now()) return "any moment now";
+  return `around ${when.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`;
+};
+
+// Try writing again now (kizn also does by itself), as a small icon.
+function TryNow({ outcomes, onError }: { outcomes: OutcomeView[]; onError: (e: string | null) => void }) {
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const retry = async () => {
     setBusy(true);
-    setError(null);
+    onError(null);
     try {
-      await call({ type: "retry_bank", outcome_id: o.id });
+      for (const o of outcomes) await call({ type: "retry_bank", outcome_id: o.id });
     } catch (e) {
-      setError((e as Error).message);
+      onError((e as Error).message);
     } finally {
       setBusy(false);
     }
   };
-  const reason = o.bank_error ?? "something went wrong writing questions";
   return (
-    <motion.div variants={rise} {...presence} className="mt-2 flex flex-col gap-2 text-xs">
-      <p className="text-warn">
-        Outcome {o.ord}: {reason}
-        {/[.!?]$/.test(reason) ? "" : "."}
+    <button
+      type="button"
+      onClick={retry}
+      disabled={busy}
+      aria-label="Try now"
+      title="Try now"
+      className="rounded p-0.5 text-ink-4 transition-colors hover:text-ink-2 disabled:opacity-60"
+    >
+      <RotateCw size={11} className={busy ? "animate-spin" : ""} aria-hidden />
+    </button>
+  );
+}
+
+// Outcomes whose questions haven't passed the checks yet: kizn leaves them a
+// while and tries again by itself, so this asks nothing of the learner.
+function Resting({ outcomes }: { outcomes: OutcomeView[] }) {
+  const [error, setError] = useState<string | null>(null);
+  const next =
+    outcomes
+      .map((o) => o.retry_at)
+      .filter((r): r is string => !!r)
+      .sort()[0] ?? null;
+  return (
+    <motion.div variants={rise} {...presence} className="mt-1.5 flex flex-col gap-1 text-xs">
+      <p className="flex items-center gap-1 text-ink-4">
+        <span className="flex-1">{outcomeList(outcomes)}: more questions later</span>
+        <Tip label="Why later">
+          None of the author's questions for {outcomes.length === 1 ? "this outcome" : "these"} passed kizn's checks
+          yet. kizn tries again by itself, {retryTime(next)}.
+        </Tip>
+        <TryNow outcomes={outcomes} onError={setError} />
       </p>
       <Reveal when={error}>
         <p className="text-danger">{error}</p>
       </Reveal>
-      <div className="flex items-center gap-1">
-        <button
-          type="button"
-          onClick={retry}
-          disabled={busy}
-          className="flex items-center gap-1 rounded px-1.5 py-0.5 text-ink-3 transition-colors hover:bg-raised hover:text-ink disabled:opacity-60"
-        >
-          <RotateCw size={11} className={busy ? "animate-spin" : ""} aria-hidden /> Try now
-        </button>
+    </motion.div>
+  );
+}
+
+// Writing stopped on an outcome for a reason the learner may need to fix (an
+// account, a connection): kept short, the reason in a tip.
+function Stuck({ outcome: o }: { outcome: OutcomeView }) {
+  const [error, setError] = useState<string | null>(null);
+  const reason = o.bank_error ?? "something went wrong writing questions";
+  return (
+    <motion.div variants={rise} {...presence} className="mt-1.5 flex flex-col gap-1 text-xs">
+      <p className="flex items-center gap-1 text-warn">
+        <span className="flex-1">Outcome {o.ord}: paused</span>
+        <Tip label="Why paused">
+          {reason.charAt(0).toUpperCase() + reason.slice(1)}
+          {/[.!?]$/.test(reason) ? "" : "."} kizn tries again by itself, {retryTime(o.retry_at)}.
+        </Tip>
+        <TryNow outcomes={[o]} onError={setError} />
         {settingsCanFix(reason) && (
-          <a
-            href="#/settings"
-            className="rounded px-1.5 py-0.5 text-ink-3 transition-colors hover:bg-raised hover:text-ink"
-          >
+          <a href="#/settings" className="rounded px-1 text-ink-3 transition-colors hover:text-ink">
             Settings
           </a>
         )}
-      </div>
+      </p>
+      <Reveal when={error}>
+        <p className="text-danger">{error}</p>
+      </Reveal>
     </motion.div>
   );
 }
