@@ -553,6 +553,17 @@ impl Store {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
+    /// A topic's conversations, oldest first.
+    pub fn threads_in_topic(&self, topic_id: &str) -> Result<Vec<ThreadRow>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, topic_id, anchor_kind, anchor_id, title, created_at, updated_at FROM threads
+             WHERE topic_id = ?1 ORDER BY created_at, id",
+        )?;
+        let rows = stmt.query_map([topic_id], thread)?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
     /// Adds a message and touches its thread.
     pub fn add_message(&self, m: &MessageRow) -> Result<()> {
         let conn = self.conn.lock().unwrap();

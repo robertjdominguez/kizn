@@ -6,11 +6,15 @@
 use std::time::Duration;
 
 use kizn_core::progress::ConceptState;
-use kizn_core::source::{Rejected, blocks, caption_track, check_text, transcript, verify, video_title, youtube_id};
+use kizn_core::source::{
+    Rejected, caption_track, check_text, page_blocks, transcript, verify, video_title, youtube_id,
+};
 use kizn_store::SourceRow;
 use serde_json::{Value, json};
 
-use crate::command::{BlockView, ConceptPageView, CueView, NoteView, ResourceView, Role, SourceView};
+use crate::command::{
+    BlockView, ConceptPageView, CueView, NoteView, ReadingItem, ReadingListView, ResourceView, Role, SourceView,
+};
 use crate::practice::days_until;
 use crate::{AppError, Ctx};
 
@@ -20,10 +24,11 @@ const FETCH_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_PAGE_BYTES: usize = 2 * 1024 * 1024;
 
 const SUGGEST_SOURCES: &str = "kizn-task: suggest-sources
-You suggest resources an adult learner can use to learn one concept: web pages to read, and YouTube videos to watch. kizn fetches every one and only offers those it can hold as text about the concept (a page's readable text, a video's captions), so suggest resources you're confident exist at that exact URL.
-- Pick the kind that suits the concept: a short demo video for how something behaves, official documentation or a well-known reference for definitions. Prefer official and well-known sources over blogs.
-- YouTube videos only if they have captions; no paywalled or login-only pages, no PDFs.
-- Up to 6, each a different URL than those listed as tried.
+You suggest resources an adult learner can use to learn one concept, in any subject (history, a language, music, management, science, software…): web pages to read and YouTube videos to watch. kizn fetches every one and only offers those it can hold as text about the concept (a page's readable text, a video's captions), so only suggest resources you're confident exist at that exact URL.
+- Prefer stable, well-known references for the subject, at the address you know best: an encyclopedia's article on it (Wikipedia, Britannica, the Stanford Encyclopedia of Philosophy…), open course material (Khan Academy, OpenStax, a university course page), the subject's own official sources where it has them (a standards body, a government agency, a museum or archive, a publisher, software documentation), and established educational explainers. A reference's main page on the concept beats a deep link you're unsure of; reputable sources beat blogs.
+- Include a YouTube video when a demonstration, a performance or a lecture would suit the concept, from an established educational channel, and only if it has captions.
+- No paywalled or login-only pages, no PDFs.
+- Up to 6, each a different URL than those listed as tried (those failed: don't guess near them).
 - \"why\": one line on what the learner gets from it.
 Reply with JSON only: {\"sources\": [{\"url\": \"https://...\", \"title\": \"...\", \"why\": \"...\"}]}";
 
@@ -111,6 +116,46 @@ fn source_view(s: &SourceRow) -> SourceView {
 }
 
 impl Ctx {
+    /// The concepts that need work (seen: missed and not yet recalled), in
+    /// topic and outcome order, with what there is to learn from.
+    pub(crate) fn reading_list(&self, topic_id: Option<&str>) -> Result<ReadingListView, AppError> {
+        let topics: Vec<kizn_store::TopicRow> = match topic_id {
+            Some(id) => vec![self.store.topic(id)?.ok_or_else(|| AppError::Refused("there's no such topic".into()))?],
+            None => self.store.all_topics()?.into_iter().filter(|t| t.status == "confirmed").collect(),
+        };
+        let mut concepts = vec![];
+        for t in topics {
+            let standings = self.standings(&t.id)?;
+            for o in self.store.outcomes(&t.id)? {
+                for c in self.store.concepts(&o.id)? {
+                    if standings.get(&c.id).map(|s| s.state) != Some(ConceptState::Seen) {
+                        continue;
+                    }
+                    let sources = self.store.sources(&c.id)?;
+                    if sources.is_empty() {
+                        self.start_finding(&c.id);
+                    }
+                    let verified =
+                        |kind: &str| sources.iter().filter(|s| s.status == "verified" && s.kind == kind).count() as i64;
+                    concepts.push(ReadingItem {
+                        studied: self.store.studied_at(&c.id)?.is_some(),
+                        pages: verified("page"),
+                        videos: verified("video"),
+                        finding: self.sourcing.lock().unwrap().contains(&c.id),
+                        has_note: self.store.note(&c.id)?.is_some(),
+                        concept_id: c.id,
+                        statement: c.statement,
+                        topic_id: t.id.clone(),
+                        topic_title: t.title.clone(),
+                        outcome_ord: o.ord,
+                    });
+                }
+            }
+        }
+        let studied = concepts.iter().filter(|c| c.studied).count() as i64;
+        Ok(ReadingListView { concepts, studied })
+    }
+
     /// A resource for the reader. One checked before kizn kept its text is
     /// fetched again now, and kept.
     pub(crate) async fn resource(&self, source_id: &str) -> Result<ResourceView, AppError> {
@@ -123,7 +168,15 @@ impl Ctx {
             self.store.concept(&s.concept_id)?.ok_or_else(|| AppError::Refused("its concept is gone".into()))?;
         let outcome =
             self.store.outcome(&concept.outcome_id)?.ok_or_else(|| AppError::Refused("its outcome is gone".into()))?;
-        if s.content_json.is_none() {
+        // Text kept by an older kizn that couldn't parse it (a whole page as
+        // one block, as Markdown pages came out) is read again.
+        let unparsed = s.kind == "page"
+            && s.content_json.as_deref().is_some_and(|c| {
+                serde_json::from_str::<Vec<kizn_core::source::Block>>(c).is_ok_and(|b| {
+                    b.len() <= 1 && b.iter().map(|b| b.text.split_whitespace().count()).sum::<usize>() > 300
+                })
+            });
+        if s.content_json.is_none() || unparsed {
             let checked = self.check_resource(&s.url, &concept.statement).await;
             match checked.content {
                 Some(content) => {
@@ -234,7 +287,7 @@ impl Ctx {
                     words: Some(v.words as i64),
                     title: v.title,
                     kind: "page",
-                    content: serde_json::to_string(&blocks(&page.body)).ok(),
+                    content: serde_json::to_string(&page_blocks(&page.content_type, &page.body)).ok(),
                     automatic: false,
                 },
             },
@@ -331,14 +384,31 @@ impl Ctx {
         }
     }
 
+    /// Looks for resources: a second round, told what failed, when the first
+    /// finds nothing kizn can use.
     async fn find_sources(&self, concept_id: &str) -> Result<(), AppError> {
+        for _ in 0..2 {
+            if self.suggest_round(concept_id).await? > 0 {
+                break;
+            }
+            let verified = self.store.sources(concept_id)?.iter().filter(|s| s.status == "verified").count();
+            if verified >= MAX_VERIFIED {
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    /// One round: the tutor suggests, kizn checks. Returns how many passed.
+    async fn suggest_round(&self, concept_id: &str) -> Result<usize, AppError> {
         let concept = self.store.concept(concept_id)?.ok_or_else(|| AppError::Refused("no such concept".into()))?;
         let outcome = self.store.outcome(&concept.outcome_id)?.ok_or_else(|| AppError::Refused("no outcome".into()))?;
         let topic = self.store.topic(&outcome.topic_id)?.ok_or_else(|| AppError::Refused("no topic".into()))?;
         let tried = self.store.sources(concept_id)?;
         let mut verified = tried.iter().filter(|s| s.status == "verified").count();
+        let before = verified;
         if verified >= MAX_VERIFIED {
-            return Ok(());
+            return Ok(0);
         }
         let tutor = self.role_model(Role::Tutor).or_else(|_| self.role_model(Role::Author))?;
         let ask = format!(
@@ -368,7 +438,7 @@ impl Ctx {
                     automatic: false,
                     added_by: "kizn".into(),
                 })?;
-                return Ok(());
+                return Ok(0);
             }
         };
         let candidates = reply["sources"].as_array().cloned().unwrap_or_default();
@@ -401,6 +471,6 @@ impl Ctx {
                 verified += 1;
             }
         }
-        Ok(())
+        Ok(verified - before)
     }
 }

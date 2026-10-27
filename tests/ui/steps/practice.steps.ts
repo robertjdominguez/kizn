@@ -264,7 +264,8 @@ When("I open Today after the set", async ({ page }) => {
 });
 
 Then("Today's next step is to read up on {int} concept", async ({ page }, n: number) => {
-  await expect(page.getByRole("heading", { name: `Read up on the ${n} concept you missed` })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Read up on what you missed" })).toBeVisible();
+  await expect(page.getByText(`${n} concept still to read`)).toBeVisible();
   await expect(page.getByRole("button", { name: /Start reading/ })).toBeVisible();
 });
 
@@ -583,13 +584,14 @@ When("I pick a passage in the page and ask {string}", async ({ page }, text: str
   const article = reader(page).locator("article");
   const para = article.locator("p", { hasText: "This page explains" }).first();
   await expect(para).toBeVisible();
-  // Select the first paragraph with the mouse, as a learner would.
-  const box = await para.boundingBox();
-  if (!box) throw new Error("no paragraph");
-  await page.mouse.move(box.x + 2, box.y + 4);
-  await page.mouse.down();
-  await page.mouse.move(box.x + box.width - 4, box.y + box.height - 4, { steps: 8 });
-  await page.mouse.up();
+  // Select the paragraph (the reader follows the selection, however it's made).
+  await para.evaluate((p) => {
+    const range = document.createRange();
+    range.selectNodeContents(p);
+    const sel = window.getSelection();
+    sel?.removeAllRanges();
+    sel?.addRange(range);
+  });
   await page.getByRole("button", { name: "Ask about the selection" }).click();
   await expect(tutor(page).locator("blockquote")).toContainText("This page explains");
   await askInSheet(page, text, "About");
@@ -634,4 +636,44 @@ When("I close the tutor and the reader, and mark it studied", async ({ page }) =
   await sheet(page).getByRole("button", { name: "Mark studied" }).click();
   await expect(sheet(page).getByText("Studied")).toBeVisible();
   await page.keyboard.press("Escape");
+});
+
+// ---- reading list ----------------------------------------------------------------------
+
+const readingList = (page: Page) => page.getByRole("dialog", { name: "Your reading" });
+
+Given("I missed {int} concepts in my starting point", async ({ page, world }, n: number) => {
+  await seedTopic(page);
+  await openPractice(page, world, `/#/practice/${TOPIC}`);
+  await skipIntro(page);
+  await answerAll(page, world as PracticeWorld, (i) => i >= n);
+});
+
+When("I open my reading list", async ({ page }) => {
+  await page.goto("/#/");
+  await page.getByRole("button", { name: /Start reading/ }).click();
+  await expect(readingList(page)).toBeVisible();
+  // kizn finds and checks resources as the list opens.
+  await expect(readingList(page).getByText("finding…")).toHaveCount(0, { timeout: 20_000 });
+});
+
+Then("I see both concepts, with what there is to learn from for each", async ({ page }) => {
+  await expect(readingList(page).getByRole("img", { name: "2 pages, 1 video" })).toHaveCount(2);
+});
+
+Then("none of them studied yet", async ({ page }) => {
+  await expect(readingList(page)).toContainText("0 of 2 studied");
+});
+
+When("I mark one of them studied", async ({ page }) => {
+  await readingList(page).locator("section button").first().click();
+  await sheet(page).last().getByRole("button", { name: "Mark studied" }).click();
+  await expect(sheet(page).last().getByText("Studied")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(sheet(page).last()).toHaveCount(0);
+});
+
+Then("the reading list shows {int} of {int} studied", async ({ page }, a: number, b: number) => {
+  await expect(readingList(page)).toContainText(`${a} of ${b} studied`);
+  await expect(readingList(page).getByLabel("Studied", { exact: true })).toHaveCount(a);
 });

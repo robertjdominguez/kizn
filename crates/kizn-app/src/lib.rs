@@ -27,8 +27,8 @@ pub use command::{
     Anchor, AnswerView, AppError, AppInfo, BlockView, CardView, CheckView, Command, ConceptChange, ConceptLine,
     ConceptPageView, ConceptProgress, ConceptView, CueView, DayView, DeckView, DisputeView, DraftInput, DraftOutcome,
     Event, KeyView, MessageView, NextStep, NoteView, OptionFeedback, OutcomeProgress, OutcomeStanding, OutcomeView,
-    ProgressView, ProviderView, Reply, ResourceView, Role, RolesView, SettingsView, SlotView, SourceView, StateCounts,
-    SummaryView, ThreadSummary, ThreadView, TodayView, TopicSummary, TopicView,
+    ProgressView, ProviderView, ReadingItem, ReadingListView, Reply, ResourceView, Role, RolesView, SettingsView,
+    SlotView, SourceView, StateCounts, SummaryView, ThreadSummary, ThreadView, TodayView, TopicSummary, TopicView,
 };
 pub use config::{CONFIG_FILE, Config};
 pub use kizn_model::Http;
@@ -195,6 +195,7 @@ impl App {
             Command::GetConcept { concept_id } => self.open_concept(&concept_id).map(Reply::Concept),
             Command::FindSources { concept_id } => self.find_again(&concept_id).map(Reply::Concept),
             Command::MarkStudied { concept_id } => self.mark_studied(&concept_id).map(Reply::Concept),
+            Command::GetReadingList { topic_id } => self.reading_list(topic_id.as_deref()).map(Reply::ReadingList),
             Command::GetResource { source_id } => self.resource(&source_id).await.map(Reply::Resource),
             Command::SaveNote { concept_id, text } => self.save_note(&concept_id, &text).map(Reply::Note),
             Command::AddSource { concept_id, url } => self.add_source(&concept_id, &url).await.map(Reply::Concept),

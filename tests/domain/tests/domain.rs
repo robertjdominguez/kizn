@@ -53,6 +53,7 @@ struct Kizn {
     added: Option<Result<kizn_app::ConceptPageView, String>>,
     /// Writing batches started while the last tutor reply streamed.
     batches_during_reply: Option<i64>,
+    reading: Option<kizn_app::ReadingListView>,
 }
 
 impl std::fmt::Debug for Kizn {
@@ -89,6 +90,7 @@ impl Kizn {
             resource: None,
             added: None,
             batches_during_reply: None,
+            reading: None,
         }
     }
 
@@ -962,7 +964,11 @@ async fn confirm_a_topic(w: &mut Kizn) {
 
 #[then("practice is available once every concept on the first outcome has one question")]
 async fn practice_available_early(w: &mut Kizn) {
-    let t = w.wait_for("the first set to be ready", |t| t.can_practise).await;
+    w.wait_for("the first set to be ready", |t| t.can_practise).await;
+    // Read again: the view counts slots a moment before it decides practice
+    // can start, and questions only ever get added.
+    let topic_id = w.topic_id();
+    let t = w.topic_from(Command::GetTopic { topic_id }).await;
     let first = &t.outcomes[0];
     let recall: Vec<_> = first.slots.iter().filter(|s| s.kind == "recall").collect();
     assert!(recall.iter().all(|s| s.have >= 1), "a concept on outcome 1 without a question: {recall:#?}");
@@ -1234,14 +1240,23 @@ impl Kizn {
             .map(|o| store.batch_count(o).unwrap_or(0))
             .sum()
         };
-        let before = batches(self);
+        // Writing batches started between the 1st and the 15th word of the
+        // reply: certainly while the tutor is answering.
+        let mut first: Option<i64> = None;
         let mut deltas = 0;
         loop {
             match tokio::time::timeout(std::time::Duration::from_secs(10), rx.recv()).await {
-                Ok(Ok(Event::TutorDelta { thread_id, .. })) if thread_id == started.id => deltas += 1,
+                Ok(Ok(Event::TutorDelta { thread_id, .. })) if thread_id == started.id => {
+                    deltas += 1;
+                    if deltas == 1 {
+                        first = Some(batches(self));
+                    }
+                    if deltas == 15 {
+                        self.batches_during_reply = first.map(|f| batches(self) - f);
+                    }
+                }
                 Ok(Ok(Event::TutorDone { thread_id, error })) if thread_id == started.id => {
                     assert!(error.is_none(), "the tutor failed: {error:?}");
-                    self.batches_during_reply = Some(batches(self) - before);
                     break;
                 }
                 Ok(Ok(_)) | Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => {}
@@ -1590,12 +1605,137 @@ fn no_new_writing(w: &mut Kizn) {
     assert_eq!(w.batches_during_reply, Some(0), "the writer started batches while the tutor answered");
 }
 
-#[tokio::main]
-async fn main() {
+// --- Reading list -----------------------------------------------------------------
+
+impl Kizn {
+    async fn reading_list(&mut self) -> kizn_app::ReadingListView {
+        match self.command(Command::GetReadingList { topic_id: None }).await {
+            Ok(Reply::ReadingList(l)) => l,
+            other => panic!("expected a ReadingList, got {other:?}"),
+        }
+    }
+}
+
+#[given(expr = "I missed {int} concepts in my starting point")]
+async fn missed_n(w: &mut Kizn, n: usize) {
+    practising(w).await;
+    let total = w.deck.as_ref().unwrap().cards.len();
+    for i in 0..total {
+        w.answer_card(i, i >= n).await;
+    }
+}
+
+#[when("I open my reading list")]
+async fn open_reading_list(w: &mut Kizn) {
+    // Opening it starts kizn looking; wait until it's found something for each.
+    for _ in 0..500 {
+        let l = w.reading_list().await;
+        if l.concepts.iter().all(|c| !c.finding && c.pages + c.videos > 0) {
+            w.reading = Some(l);
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    panic!("the reading list never filled: {:#?}", w.reading_list().await);
+}
+
+#[then("I see both concepts, with what there is to learn from for each")]
+fn reading_both(w: &mut Kizn) {
+    let l = w.reading.as_ref().unwrap();
+    assert_eq!(l.concepts.len(), 2);
+    assert!(l.concepts.iter().all(|c| c.pages == 2 && c.videos == 1), "{l:#?}");
+}
+
+#[then("none of them studied yet")]
+fn none_studied(w: &mut Kizn) {
+    assert_eq!(w.reading.as_ref().unwrap().studied, 0);
+}
+
+#[when("I mark one of them studied")]
+async fn mark_one(w: &mut Kizn) {
+    let concept_id = w.reading.as_ref().unwrap().concepts[0].concept_id.clone();
+    w.concept_from(Command::MarkStudied { concept_id }).await;
+}
+
+#[then(expr = "the reading list shows {int} of {int} studied")]
+async fn reading_progress(w: &mut Kizn, studied: i64, total: usize) {
+    let l = w.reading_list().await;
+    assert_eq!((l.studied, l.concepts.len()), (studied, total));
+    assert!(l.concepts[0].studied && !l.concepts[1].studied);
+}
+
+// --- A second look ------------------------------------------------------------------
+
+const REGISTRY: &str = "01SEEDCONCEPT00000000103";
+
+#[given("I missed the concept about registries")]
+async fn missed_registry(w: &mut Kizn) {
+    practising(w).await;
+    let n = w.deck.as_ref().unwrap().cards.len();
+    let registry_card = (0..n)
+        .find(|&i| {
+            w.store().item(&w.deck.as_ref().unwrap().cards[i].item_id).unwrap().unwrap().concept_ids[0] == REGISTRY
+        })
+        .expect("no card for the registry concept");
+    for i in 0..n {
+        w.answer_card(i, i != registry_card).await;
+    }
+}
+
+#[when("kizn looks for resources for that concept")]
+async fn looks_for_registry(w: &mut Kizn) {
+    for _ in 0..500 {
+        let c = w.concept_from(Command::GetConcept { concept_id: REGISTRY.into() }).await;
+        if c.finding != "finding" {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    panic!("still looking after 10s");
+}
+
+#[then("the first suggestions were all turned down")]
+fn first_round_down(w: &mut Kizn) {
+    let rows = w.store().sources(REGISTRY).unwrap();
+    let first: Vec<_> = rows.iter().take(2).collect();
+    assert!(first.iter().all(|r| r.status != "verified"), "{first:#?}");
+}
+
+#[then("it asked again and offers what it found")]
+fn asked_again(w: &mut Kizn) {
+    let c = w.concept.as_ref().unwrap();
+    assert_eq!(c.finding, "found");
+    assert_eq!(c.sources.len(), 3, "{:#?}", c.sources);
+}
+
+// The scenarios run on a thread with a roomy stack: the world and its step
+// futures outgrow the 1 MB a Windows main thread gets.
+fn main() {
+    std::thread::Builder::new()
+        .name("scenarios".into())
+        .stack_size(32 * 1024 * 1024)
+        .spawn(|| {
+            tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .thread_stack_size(8 * 1024 * 1024)
+                .build()
+                .expect("a tokio runtime")
+                .block_on(run())
+        })
+        .expect("the scenarios thread")
+        .join()
+        .expect("the scenarios ran");
+}
+
+async fn run() {
     let features = concat!(env!("CARGO_MANIFEST_DIR"), "/../../features");
     let extra = std::env::var("KIZN_BDD_TAG").ok().filter(|t| !t.is_empty());
     let extra = extra.map(|t| t.trim_start_matches('@').to_string());
+    // A few at a time: scenarios share the machine with the fake model
+    // server, and a small CI runner starved it when 64 ran at once.
+    let at_once = std::env::var("KIZN_BDD_AT_ONCE").ok().and_then(|n| n.parse().ok()).unwrap_or(8);
     Kizn::cucumber()
+        .max_concurrent_scenarios(at_once)
         .fail_on_skipped()
         .filter_run_and_exit(features, move |feature, rule, scenario| {
             let tags: Vec<&String> =

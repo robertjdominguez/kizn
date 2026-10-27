@@ -290,8 +290,10 @@ impl Ctx {
                     at: ctx.now(),
                 });
             }
+            // Announced while still counted as answering, so the bank writer
+            // (which waits for the tutor) only starts once it's done.
+            let _ = ctx.events.send(Event::TutorDone { thread_id: id.clone(), error: failed });
             ctx.tutoring.lock().unwrap().remove(&id);
-            let _ = ctx.events.send(Event::TutorDone { thread_id: id, error: failed });
         });
         self.thread_view(&thread)
     }

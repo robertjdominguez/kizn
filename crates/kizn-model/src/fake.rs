@@ -299,13 +299,15 @@ fn streamed_words(answer: Option<&Value>) -> Vec<String> {
 
 /// Server-sent events, a little apart when `paced` (so a streamed reply
 /// arrives word by word, as a real model's does).
-fn sse_paced(events: Vec<String>, paced: bool) -> Response {
+fn sse_paced(events: Vec<String>, paced: bool, slow: bool) -> Response {
     if !paced {
         return sse(events);
     }
+    // The slow model streams slowly too (a word every 40 ms).
+    let gap = std::time::Duration::from_millis(if slow { 40 } else { 12 });
     use futures_util::StreamExt;
-    let stream = futures_util::stream::iter(events).then(|e| async move {
-        tokio::time::sleep(std::time::Duration::from_millis(12)).await;
+    let stream = futures_util::stream::iter(events).then(move |e| async move {
+        tokio::time::sleep(gap).await;
         Ok::<_, std::convert::Infallible>(Bytes::from(format!("data: {e}\n\n")))
     });
     Response::builder().header(header::CONTENT_TYPE, "text/event-stream").body(Body::from_stream(stream)).unwrap()
@@ -336,7 +338,7 @@ fn openai(b: Behaviour, req: &Value, answer: Option<Value>) -> Response {
         let mut events: Vec<String> =
             words.iter().map(|t| json!({"choices": [{"delta": {"content": t}}]}).to_string()).collect();
         events.push("[DONE]".into());
-        return sse_paced(events, words.len() > 2);
+        return sse_paced(events, words.len() > 2, b == Behaviour::Slow);
     }
     let schema = !req["response_format"].is_null();
     let answer = answer.map(|a| a.to_string()).unwrap_or_else(|| ANSWER.to_string());
@@ -371,7 +373,7 @@ fn anthropic(b: Behaviour, req: &Value, answer: Option<Value>) -> Response {
             events.push(json!({"type": "content_block_delta", "delta": {"type": "text_delta", "text": t}}).to_string());
         }
         events.push(json!({"type": "message_stop"}).to_string());
-        return sse_paced(events, words.len() > 2);
+        return sse_paced(events, words.len() > 2, b == Behaviour::Slow);
     }
     let tools = !req["tools"].is_null();
     let answer = answer.unwrap_or_else(|| json!({"ok": true, "word": "kizn"}));
@@ -591,6 +593,15 @@ impl FakeServer {
                     .chars()
                     .map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '-' })
                     .collect();
+                // A first round where nothing can be used (for the concept
+                // about registries): kizn should ask again.
+                let tried = input["tried"].as_array().is_some_and(|t| !t.is_empty());
+                if !tried && concept.contains("registry") {
+                    return Some(json!({ "sources": [
+                        {"url": "https://old.example.org/web/missing", "title": "Archived notes", "why": "Background reading."},
+                        {"url": "https://learn.example.com/web/shell", "title": "Interactive course", "why": "A hands-on walkthrough."},
+                    ]}));
+                }
                 Some(json!({ "sources": [
                     {"url": format!("https://docs.example.org/web/article/{slug}"), "title": format!("{concept}: the guide"), "why": "The official explanation, with a worked example."},
                     {"url": "https://old.example.org/web/missing", "title": "Archived notes", "why": "Background reading."},

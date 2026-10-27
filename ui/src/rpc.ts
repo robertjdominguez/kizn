@@ -41,6 +41,7 @@ const REPLY = {
   get_threads: "threads",
   get_thread: "thread",
   get_resource: "resource",
+  get_reading_list: "reading_list",
   save_note: "note",
   add_source: "concept",
 } as const satisfies Record<Command["type"], Reply["type"]>;

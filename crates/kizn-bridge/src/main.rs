@@ -127,6 +127,8 @@ fn inspect(what: Option<&str>, topic: Option<&str>) -> Result<(), String> {
     match what {
         Some("bank") => inspect_bank(topic),
         Some("progress") => inspect_progress(topic),
+        Some("sources") => inspect_sources(topic),
+        Some("tutor") => inspect_tutor(topic),
         Some("db") => {
             let path = Paths::from_env().data_dir.join(kizn_app::DB_FILE);
             if !path.exists() {
@@ -140,7 +142,7 @@ fn inspect(what: Option<&str>, topic: Option<&str>) -> Result<(), String> {
             }
             Ok(())
         }
-        other => Err(format!("inspect what? {other:?}: db, bank or progress")),
+        other => Err(format!("inspect what? {other:?}: db, bank, progress, sources or tutor")),
     }
 }
 
@@ -204,6 +206,103 @@ fn inspect_progress(topic: Option<&str>) -> Result<(), String> {
             println!("    {}  {}  {stem}{void}", a.at, if a.correct { "✓" } else { "✗" });
         }
         println!();
+    }
+    Ok(())
+}
+
+/// The confirmed topics matching `topic` (an id prefix or part of a title).
+fn topics_matching(store: &kizn_store::Store, topic: Option<&str>) -> Result<Vec<kizn_store::TopicRow>, String> {
+    let topics: Vec<_> = store
+        .all_topics()
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .filter(|t| t.status == "confirmed")
+        .filter(|t| topic.is_none_or(|q| t.id.starts_with(q) || t.title.to_lowercase().contains(&q.to_lowercase())))
+        .collect();
+    if topics.is_empty() {
+        return Err(match topic {
+            Some(q) => format!("no confirmed topic matches {q:?}"),
+            None => "no confirmed topics yet".into(),
+        });
+    }
+    Ok(topics)
+}
+
+fn open_store() -> Result<kizn_store::Store, String> {
+    let path = Paths::from_env().data_dir.join(kizn_app::DB_FILE);
+    if !path.exists() {
+        return Err(format!("no database at {} yet", path.display()));
+    }
+    kizn_store::Store::open(&path).map_err(|e| e.to_string())
+}
+
+/// Every resource kizn checked, per concept: offered or not, and why; and
+/// which questions cite one.
+fn inspect_sources(topic: Option<&str>) -> Result<(), String> {
+    let store = open_store()?;
+    for t in topics_matching(&store, topic)? {
+        println!("{}  ({})", t.title, t.id);
+        let (mut offered, mut checked) = (0, 0);
+        for o in store.outcomes(&t.id).map_err(|e| e.to_string())? {
+            let items = store.items(&o.id, Some("active")).map_err(|e| e.to_string())?;
+            for c in store.concepts(&o.id).map_err(|e| e.to_string())? {
+                let sources = store.sources(&c.id).map_err(|e| e.to_string())?;
+                if sources.is_empty() {
+                    continue;
+                }
+                println!("  {}.{} {}", o.ord, c.ord, c.statement);
+                for s in &sources {
+                    if s.url.is_empty() {
+                        println!("       ✗ (couldn't ask) {}", s.reason.as_deref().unwrap_or(""));
+                        continue;
+                    }
+                    checked += 1;
+                    let mark = if s.status == "verified" {
+                        offered += 1;
+                        "✓"
+                    } else {
+                        "✗"
+                    };
+                    let who = if s.added_by == "learner" { " [yours]" } else { "" };
+                    let auto = if s.automatic { " [auto captions]" } else { "" };
+                    println!("       {mark} {:<5} {}{who}{auto}", s.kind, s.url);
+                    match &s.reason {
+                        Some(r) => println!("               {r}"),
+                        None => println!("               {} · {} words", s.title, s.words.unwrap_or(0)),
+                    }
+                }
+                let cited =
+                    items.iter().filter(|i| i.concept_ids.first() == Some(&c.id) && i.source_ref.is_some()).count();
+                if cited > 0 {
+                    println!("       {cited} question(s) cite a resource");
+                }
+            }
+        }
+        println!("  {offered} offered of {checked} checked\n");
+    }
+    Ok(())
+}
+
+/// Every conversation with the tutor: what it was about, and what was said.
+fn inspect_tutor(topic: Option<&str>) -> Result<(), String> {
+    let store = open_store()?;
+    for t in topics_matching(&store, topic)? {
+        println!("{}  ({})", t.title, t.id);
+        let threads = store.threads_in_topic(&t.id).map_err(|e| e.to_string())?;
+        if threads.is_empty() {
+            println!("  no conversations yet\n");
+            continue;
+        }
+        for th in threads {
+            println!("  — {} on {} {}  ({})", th.anchor_kind, th.anchor_id, th.title, th.updated_at);
+            for m in store.messages(&th.id).map_err(|e| e.to_string())? {
+                let who = if m.role == "tutor" { "tutor  " } else { "learner" };
+                for (i, line) in m.text.lines().enumerate() {
+                    println!("    {} {line}", if i == 0 { who } else { "       " });
+                }
+            }
+            println!();
+        }
     }
     Ok(())
 }

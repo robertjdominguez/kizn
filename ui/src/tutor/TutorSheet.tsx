@@ -105,7 +105,8 @@ function Conversation({
         if (e.thread_id !== current.current) return;
         call({ type: "get_thread", thread_id: e.thread_id })
           .then((t) => {
-            setThread(t);
+            // Done means done, whatever a read in the same instant says.
+            setThread({ ...t, streaming: false });
             setPending("");
             if (e.error) setError(`The tutor couldn't answer: ${e.error}`);
           })

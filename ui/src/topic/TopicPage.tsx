@@ -13,6 +13,7 @@ import { bead, EASE, pop, presence, rise, stage } from "../motion";
 import { whenDue } from "../practice/Summary";
 import { call, type TopicView } from "../rpc";
 import { ConceptSheet } from "../study/ConceptSheet";
+import { ReadingList } from "../study/ReadingList";
 
 // A topic. The main column answers "what now?" (Next up) and "what do I
 // know?" (Learn these, Your concepts); the sidebar holds the quiet rest (the
@@ -24,6 +25,10 @@ export function TopicPage({ topicId }: { topicId: string }) {
   // The concept open in the sheet, to read about it.
   const [concept, setConcept] = useState<string | null>(null);
   const closeConcept = useCallback(() => setConcept(null), []);
+  // "Start reading": everything to study in this topic.
+  const [readingAll, setReadingAll] = useState(false);
+  // (Marking studied sends topic_changed, which reloads the page.)
+  const closeReadingAll = useCallback(() => setReadingAll(false), []);
 
   const load = useCallback(() => {
     call({ type: "get_topic", topic_id: topicId })
@@ -78,7 +83,7 @@ export function TopicPage({ topicId }: { topicId: string }) {
       {confirmed && (
         <Stage stagger={0.12} className="grid grid-cols-1 gap-10 lg:grid-cols-[minmax(0,1fr)_15rem]">
           <motion.div variants={stage(0.14, 0)} className="flex min-w-0 flex-col gap-8">
-            <NextUp topic={confirmed} onOpen={setConcept} />
+            <NextUp topic={confirmed} onReadAll={() => setReadingAll(true)} />
             <LearnThese topic={confirmed} onOpen={setConcept} />
             <YourConcepts topic={confirmed} onOpen={setConcept} />
           </motion.div>
@@ -86,6 +91,7 @@ export function TopicPage({ topicId }: { topicId: string }) {
         </Stage>
       )}
       <ConceptSheet conceptId={concept} onClose={closeConcept} />
+      {confirmed && <ReadingList open={readingAll} topicId={confirmed.id} onClose={closeReadingAll} />}
     </Screen>
   );
 }
@@ -98,7 +104,7 @@ const toLearn = (t: TopicView) => concepts(t).filter((c) => c.state === "seen");
 const MARK_TONE: Record<string, string> = { seen: "text-warn", recalled: "text-teal", retained: "text-teal" };
 
 // The one thing to do now, and the page's only primary button.
-function NextUp({ topic: t, onOpen }: { topic: TopicView; onOpen: (conceptId: string) => void }) {
+function NextUp({ topic: t, onReadAll }: { topic: TopicView; onReadAll: () => void }) {
   const practise = `#/practice/${encodeURIComponent(t.id)}`;
   const unread = toLearn(t).filter((c) => !c.studied);
   const cards = Number(t.due_now) + Number(t.new_now);
@@ -129,12 +135,16 @@ function NextUp({ topic: t, onOpen }: { topic: TopicView; onOpen: (conceptId: st
           : `${plural(fresh, "new concept")}. About ${minutes} min.`;
     action = { label: "Practise now", href: practise, icon: Play };
   } else {
-    const when = whenDue(t.next_due_in_days);
-    title = when ? `Nothing due until ${when}` : "Nothing due";
+    const days = t.next_due_in_days === null ? null : Number(t.next_due_in_days);
+    title =
+      days === null || days <= 0
+        ? "Nothing due"
+        : days === 1
+          ? "Nothing due until tomorrow"
+          : `Nothing due for ${days} days`;
     if (unread.length > 0) {
       line = `Meanwhile, read up on the ${plural(unread.length, "concept")} you missed.`;
-      const first = unread[0];
-      action = { label: "Start reading", onClick: () => first && onOpen(first.id), icon: BookOpen };
+      action = { label: "Start reading", onClick: onReadAll, icon: BookOpen };
     } else {
       line = "You're up to date. Your concepts are below if you want to read ahead.";
     }

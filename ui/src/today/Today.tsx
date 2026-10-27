@@ -10,7 +10,7 @@ import { subscribe } from "../events";
 import { bead, EASE, button as landing, pop, popStage, SPRING, stage } from "../motion";
 import { whenDue } from "../practice/Summary";
 import { call, type TodayView } from "../rpc";
-import { ConceptSheet } from "../study/ConceptSheet";
+import { ReadingList } from "../study/ReadingList";
 
 // Home. Calm first, then one invitation: a greeting, the one next step
 // (warm, with how small it is), the week so far, and your topics, quieter.
@@ -23,8 +23,9 @@ import { ConceptSheet } from "../study/ConceptSheet";
 export function Today() {
   const [today, setToday] = useState<TodayView | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [concept, setConcept] = useState<string | null>(null);
-  const closeConcept = useCallback(() => setConcept(null), []);
+  // "Start reading" opens everything to study.
+  const [reading, setReading] = useState(false);
+  const closeReading = useCallback(() => setReading(false), []);
 
   const load = useCallback(() => {
     call({ type: "get_today" })
@@ -89,14 +90,14 @@ export function Today() {
           )}
         </AnimatePresence>
 
-        <Hero step={today.next} onRead={setConcept} />
+        <Hero step={today.next} onRead={() => setReading(true)} />
 
         <AnimatePresence>{practisedEver && <Week key="week" today={today} />}</AnimatePresence>
 
         <AnimatePresence>{today.topics.length > 0 && <Topics key="topics" topics={today.topics} />}</AnimatePresence>
       </Stage>
 
-      <ConceptSheet conceptId={concept} onClose={closeConcept} />
+      <ReadingList open={reading} onClose={closeReading} />
     </Screen>
   );
 }
@@ -180,11 +181,10 @@ function heroFor(step: NextStep, onRead: (conceptId: string) => void): HeroConte
       const when = whenDue(step.next_due_in_days);
       return {
         eyebrow: "Something to read",
-        title: `Read up on the ${plural(step.count, "concept")} you missed`,
-        line: when
-          ? `They come back ${when}. Reading first makes that recall count.`
-          : "Reading first makes the next recall count.",
+        title: "Read up on what you missed",
+        line: `${plural(step.count, "concept")} still to read${when ? `; they come back ${when}` : ""}. Reading first makes that recall count.`,
         action: { label: "Start reading", icon: BookOpen, onClick: () => onRead(step.concept_id) },
+        note: "See everything to study, and what there is for each.",
       };
     }
     case "nothing_due": {
