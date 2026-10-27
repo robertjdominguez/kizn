@@ -1934,6 +1934,17 @@ async fn solid_and_shaky(w: &mut Kizn, solid: String, shaky: String) {
     assert_eq!((result(&solid).as_deref(), result(&shaky).as_deref()), (Some("solid"), Some("shaky")));
 }
 
+#[then(expr = "{string} is on my map to start with, and {string} isn't")]
+async fn on_map_to_start(w: &mut Kizn, shaky: String, solid: String) {
+    let map = match w.command(Command::GetMap).await {
+        Ok(Reply::Map(m)) => m,
+        other => panic!("expected the map, got {other:?}"),
+    };
+    let suggested = |t: &str| map.nodes.iter().any(|n| n.kind == "suggestion" && n.title == t);
+    assert!(suggested(&shaky), "{shaky} isn't suggested on the map");
+    assert!(!suggested(&solid), "{solid} is on the map, but it seems solid");
+}
+
 #[when(expr = "I start {string} from the check")]
 async fn start_from_check(w: &mut Kizn, title: String) {
     let g = w.ground().await;

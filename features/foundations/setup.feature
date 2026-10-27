@@ -24,9 +24,10 @@ Feature: Foundations at setup
   Scenario: Checking the ground
     Given I confirmed a topic keeping 2 foundations
     Then there are 3 questions on each foundation to check
-    When I answer the questions on "Union filesystems" mostly right
-    And I answer the questions on "Linux processes" mostly wrong
+    When I answer the questions on "Linux processes" mostly wrong
+    And I answer the questions on "Union filesystems" mostly right
     Then "Union filesystems" seems solid and "Linux processes" might be shaky
+    And "Linux processes" is on my map to start with, and "Union filesystems" isn't
 
   @domain
   Scenario: Starting a shaky foundation

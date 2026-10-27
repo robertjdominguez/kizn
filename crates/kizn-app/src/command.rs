@@ -640,7 +640,9 @@ pub struct GroundFoundation {
     pub suggestion_id: String,
     pub title: String,
     pub why: Option<String>,
-    /// The suggestion's status ("kept", "later", "dismissed", "started").
+    /// The suggestion's status: "kept" (not checked yet), "solid" (checked,
+    /// nothing to do), "later" (on the map to start with; a shaky one's
+    /// default), "dismissed" or "started".
     pub status: String,
     /// "solid" or "shaky" once every question is answered.
     pub result: Option<String>,
