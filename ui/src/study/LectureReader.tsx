@@ -100,20 +100,23 @@ function Read({
     setLit(n);
     setTimeout(() => setLit(null), 1600);
   };
+  // Footnote marks after a part: "1,2", each a link to its source.
   const notes = (ns: number[]) => (
-    <>
-      {ns.map((n) => (
-        <button
-          key={n}
-          type="button"
-          onClick={() => jump(n)}
-          aria-label={`Source ${n}`}
-          className="ml-0.5 align-super text-[10px] font-semibold text-accent hover:underline"
-        >
-          {n}
-        </button>
+    <sup className="ml-0.5 text-[10px] font-semibold text-accent">
+      {ns.map((n, i) => (
+        <Fragment key={n}>
+          {i > 0 && ","}
+          <button
+            type="button"
+            onClick={() => jump(n)}
+            aria-label={`Source ${n}`}
+            className="px-px leading-none hover:underline"
+          >
+            {n}
+          </button>
+        </Fragment>
       ))}
-    </>
+    </sup>
   );
 
   return (

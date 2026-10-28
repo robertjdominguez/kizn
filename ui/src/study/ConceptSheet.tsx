@@ -359,8 +359,8 @@ function ReadingCard({
           <BookOpen size={14} className="text-accent" aria-hidden /> Read the lecture
         </span>
         <span className="text-xs text-ink-3">
-          {c.lecture.key_terms.length} key terms · {paragraphs} paragraphs · from {c.lecture.footnotes.length} sources,
-          every part checked against them
+          {plural(c.lecture.key_terms.length, "key term")} · {plural(paragraphs, "paragraph")} · from{" "}
+          {plural(c.lecture.footnotes.length, "source")}, every part checked against them
         </span>
       </button>
     );
@@ -382,3 +382,5 @@ function ReadingCard({
     </div>
   );
 }
+
+const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`;

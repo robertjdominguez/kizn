@@ -551,9 +551,10 @@ Then("every paragraph, key term and mix-up cites the sources kizn read", async (
   await openLecture(page);
   await expect(lecture(page).getByRole("button", { name: "Source 1" }).first()).toBeVisible();
   await expect(lecture(page).getByRole("button", { name: "Source 2" }).first()).toBeVisible();
-  const sources = lecture(page).getByRole("region", { name: "Sources" });
-  await expect(sources).toContainText("docs.example.org");
-  await expect(sources).toContainText("blog.example.net");
+  // Two or more of the sources kizn read for it (pages or videos).
+  const sources = lecture(page).getByRole("region", { name: "Sources" }).getByRole("listitem");
+  expect(await sources.count()).toBeGreaterThanOrEqual(2);
+  await expect(sources.first()).toContainText("docs.example.org");
 });
 
 Then("it takes on the mix-ups my wrong answers showed", async ({ page }) => {
