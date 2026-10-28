@@ -25,6 +25,10 @@ pub enum ModelError {
     BadReply(String),
     #[error("{0}")]
     Config(String),
+    /// The provider has no web search of its own (only Anthropic's does,
+    /// here).
+    #[error("this provider can't search the web")]
+    NoSearch,
 }
 
 impl ModelError {
