@@ -1569,8 +1569,16 @@ fn reply_moment(w: &mut Kizn) {
 
 #[when("a question about it is replaced")]
 async fn question_replaced(w: &mut Kizn) {
-    // The missed card's question disputed: its slot gets a replacement,
+    // Questions are written just in time, so the wrong answer already had
+    // the concept topped up (before its resources were found). Here every
+    // question on it goes, as if each were disputed: its replacements are
     // written now that the concept has resources.
+    let concept_id = w.concept.as_ref().unwrap().concept_id.clone();
+    w.store()
+        .execute_batch(&format!(
+            "UPDATE items SET status = 'disputed' WHERE status = 'active' AND concept_ids_json = '[\"{concept_id}\"]'"
+        ))
+        .unwrap();
     let attempt_id = w.answers[0].attempt_id.clone();
     assert!(matches!(w.command(Command::Dispute { attempt_id }).await, Ok(Reply::Disputed(_))));
 }
@@ -2303,4 +2311,72 @@ async fn new_topic_first(w: &mut Kizn) {
     }
     // At most the batch already under way when the new topic was confirmed.
     assert!(older_first <= 1, "the older topic got {older_first} batches before the new one's first set");
+}
+
+// --- Written just in time ------------------------------------------------------------
+
+#[given("a topic I've just confirmed")]
+async fn just_confirmed(w: &mut Kizn) {
+    drafted_topic(w).await;
+    let topic_id = w.topic_id();
+    w.topic_from(Command::ConfirmTopic { topic_id }).await;
+}
+
+impl Kizn {
+    /// Each concept's active questions: (outcome order, concept, kinds, unseen).
+    fn questions_by_concept(&self) -> Vec<(i64, String, usize, usize)> {
+        let store = self.store();
+        let attempted: std::collections::HashSet<String> =
+            store.attempts(None).unwrap().into_iter().map(|a| a.item_id).collect();
+        let mut out = vec![];
+        for o in store.outcomes(&self.topic_id()).unwrap() {
+            let items = store.items(&o.id, Some("active")).unwrap();
+            for c in store.concepts(&o.id).unwrap() {
+                let mine: Vec<_> = items.iter().filter(|i| i.concept_ids.first() == Some(&c.id)).collect();
+                let unseen = mine.iter().filter(|i| !attempted.contains(&i.id)).count();
+                out.push((o.ord, c.id, mine.len(), unseen));
+            }
+        }
+        out
+    }
+}
+
+#[then("outcomes 1 and 2 have 2 recall questions on each concept, and outcome 3 has none yet")]
+fn written_ahead(w: &mut Kizn) {
+    for (ord, concept, n, _) in w.questions_by_concept() {
+        let want = if ord <= 2 { 2 } else { 0 };
+        assert_eq!(n, want, "outcome {ord}'s concept {concept}");
+    }
+    let store = w.store();
+    for o in store.outcomes(&w.topic_id()).unwrap() {
+        let kinds: Vec<String> = store.items(&o.id, Some("active")).unwrap().into_iter().map(|i| i.kind).collect();
+        assert!(kinds.iter().all(|k| k == "recall"), "outcome {} has {kinds:?}", o.ord);
+    }
+}
+
+#[when("I answer every question in my first practice")]
+async fn answer_first_practice(w: &mut Kizn) {
+    w.wait_for("the first set", |t| t.can_practise).await;
+    let deck = w.start_practice().await;
+    for i in 0..deck.cards.len() {
+        w.answer_card(i, true).await;
+    }
+}
+
+#[then("each concept I practised has 2 questions I haven't seen")]
+fn topped_up(w: &mut Kizn) {
+    let store = w.store();
+    let practised: std::collections::HashSet<String> = store
+        .attempts(None)
+        .unwrap()
+        .into_iter()
+        .filter_map(|a| store.item(&a.item_id).ok().flatten())
+        .filter_map(|i| i.concept_ids.first().cloned())
+        .collect();
+    assert!(!practised.is_empty());
+    for (ord, concept, _, unseen) in w.questions_by_concept() {
+        if practised.contains(&concept) {
+            assert_eq!(unseen, 2, "outcome {ord}'s concept {concept}");
+        }
+    }
 }
