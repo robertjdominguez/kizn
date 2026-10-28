@@ -1,4 +1,4 @@
-import { ArrowRight, Check, ChevronLeft, LoaderCircle, Play } from "lucide-react";
+import { ArrowRight, Check, ChevronLeft, LoaderCircle } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { GroundFoundation } from "../bindings/GroundFoundation";
@@ -249,19 +249,16 @@ function Card({
 // is on the map to start with), and a way to change it.
 function Summary({ g, onChange }: { g: GroundView; onChange: () => void }) {
   const [error, setError] = useState<string | null>(null);
-  const resolve = (f: GroundFoundation, action: "start" | "later" | "dismiss") => {
+  const resolve = (f: GroundFoundation, action: "prepare" | "dismiss") => {
     setError(null);
-    if (action === "start") {
-      window.location.hash = `#/new-topic?foundation=${encodeURIComponent(f.suggestion_id)}`;
-      return;
-    }
     call({ type: "resolve_foundation", suggestion_id: f.suggestion_id, action })
       .then(onChange)
       .catch((e: Error) => setError(e.message));
   };
-  const onMap = g.foundations.filter((f) => f.status === "later");
+  // The foundations kizn is preparing: where to start, on the map.
+  const onMap = g.foundations.filter((f) => f.status === "started" && f.topic_id);
   const mapHref = `#/map?${new URLSearchParams({
-    arrived: onMap.map((f) => f.suggestion_id).join(","),
+    arrived: onMap.map((f) => f.topic_id as string).join(","),
     under: g.topic_id,
     from: "check",
   })}`;
@@ -309,39 +306,33 @@ function Summary({ g, onChange }: { g: GroundView; onChange: () => void }) {
 }
 
 // What happened to a foundation, in a few words, and the one or two ways to
-// change it.
-function Choice({ f, onResolve }: { f: GroundFoundation; onResolve: (a: "start" | "later" | "dismiss") => void }) {
+// change it: one kizn is preparing can go ("not needed"); one that seemed
+// solid, or was let go, can be prepared after all.
+function Choice({ f, onResolve }: { f: GroundFoundation; onResolve: (a: "prepare" | "dismiss") => void }) {
   const quiet = "rounded-md px-2 py-1 text-xs text-ink-3 transition-colors hover:bg-raised hover:text-ink";
-  const start = (
-    <button
-      type="button"
-      onClick={() => onResolve("start")}
-      className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-accent hover:bg-accent/10"
-    >
-      <Play size={11} aria-hidden /> Start it now
-    </button>
-  );
-  const quietly = (label: string, action: "later" | "dismiss") => (
+  const quietly = (label: string, action: "prepare" | "dismiss") => (
     <button type="button" onClick={() => onResolve(action)} className={quiet}>
       {label}
     </button>
   );
   const { line, actions } =
-    f.status === "later"
+    f.status === "started"
       ? {
-          line: "On your map, to start with.",
+          line: "kizn is preparing it underneath, to start with.",
           actions: (
             <>
-              {start}
+              {f.topic_id && (
+                <a href={`#/topic/${encodeURIComponent(f.topic_id)}`} className={quiet}>
+                  Open
+                </a>
+              )}
               {quietly("Not needed", "dismiss")}
             </>
           ),
         }
       : f.status === "dismissed"
-        ? { line: "Not added.", actions: quietly("Add it to my map", "later") }
-        : f.status === "started"
-          ? { line: "Being set up.", actions: null }
-          : { line: "Good ground to build on.", actions: quietly("Add it anyway", "later") };
+        ? { line: "Not needed.", actions: quietly("Prepare it after all", "prepare") }
+        : { line: "Good ground to build on.", actions: quietly("Prepare it anyway", "prepare") };
   return (
     <AnimatePresence mode="wait" initial={false}>
       <motion.div

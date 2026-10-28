@@ -367,6 +367,7 @@ const MARK_TONE: Record<string, string> = { seen: "text-warn", recalled: "text-t
 const MAX_MARKS = 20;
 
 function topicStatus(t: TopicSummary): ReactNode {
+  if (t.status === "draft" && t.origin === "kizn") return "Being prepared by kizn";
   if (t.status === "draft") return "Draft · finish setting it up";
   if (t.states.length === 0) return "Nothing to practise yet";
   const due = Number(t.due_now);
@@ -379,7 +380,12 @@ function topicStatus(t: TopicSummary): ReactNode {
 }
 
 function TopicCard({ topic: t }: { topic: TopicSummary }) {
-  const href = t.status === "draft" ? `#/setup/${encodeURIComponent(t.id)}` : `#/topic/${encodeURIComponent(t.id)}`;
+  // A draft of the learner's is theirs to finish; one kizn is preparing
+  // opens on its page.
+  const href =
+    t.status === "draft" && t.origin !== "kizn"
+      ? `#/setup/${encodeURIComponent(t.id)}`
+      : `#/topic/${encodeURIComponent(t.id)}`;
   const shown = t.states.slice(0, MAX_MARKS);
   const pct = Number(t.expected) > 0 ? Math.min(100, (Number(t.active) / Number(t.expected)) * 100) : 0;
   return (

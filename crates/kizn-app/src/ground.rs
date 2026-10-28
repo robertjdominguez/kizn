@@ -35,15 +35,19 @@ fn result(answered: usize, correct: usize, total: usize) -> Option<&'static str>
 }
 
 impl Ctx {
-    /// Foundations to check for a topic: kept, and not a topic yet.
+    /// Foundations checked (or to check) for a topic: kept, and not a topic
+    /// the learner already had.
     fn to_check(&self, topic_id: &str) -> Result<Vec<kizn_store::SuggestionRow>, AppError> {
         Ok(self
             .store
             .suggestions(Some(topic_id))?
             .into_iter()
-            .filter(|s| {
-                s.topic_id.is_none()
-                    && matches!(s.status.as_str(), "kept" | "solid" | "later" | "dismissed" | "started")
+            // Started ones stay (kizn may be preparing them); linked ones (a
+            // topic the learner already had) were never checked.
+            .filter(|s| match s.status.as_str() {
+                "started" => true,
+                "kept" | "solid" | "later" | "dismissed" => s.topic_id.is_none(),
+                _ => false,
             })
             .filter(|s| s.source == "draft")
             .collect())
@@ -157,6 +161,7 @@ impl Ctx {
             let correct = items.iter().filter(|g| g.answer.is_some_and(|(_, c)| c)).count();
             foundations.push(GroundFoundation {
                 suggestion_id: s.id,
+                topic_id: s.topic_id,
                 title: s.title,
                 why: s.why,
                 status: s.status,
@@ -194,21 +199,30 @@ impl Ctx {
         }
         let picked = order_shown[chosen as usize] as usize;
         self.store.answer_ground(item_id, picked, opts[picked].correct, &self.now())?;
-        // The last answer decides, and the evidence sets the default: a shaky
-        // foundation goes on the map to start with, a solid one stays off it.
-        // The learner can change either from the check or the map.
-        if s.status == "kept" {
-            let items = self.store.ground_items(&s.id)?;
-            let answered = items.iter().filter(|g| g.answer.is_some()).count();
-            let correct = items.iter().filter(|g| g.answer.is_some_and(|(_, c)| c)).count();
-            match result(answered, correct, items.len()) {
-                Some("shaky") => self.store.set_suggestion(&s.id, "later", None)?,
-                Some(_) => self.store.set_suggestion(&s.id, "solid", None)?,
-                None => {}
-            }
+        // The last answer decides; a solid foundation is marked so and stays
+        // off the map (a shaky one, kizn prepares: see App::answer_and_prepare).
+        if s.status == "kept" && self.ground_result(&s.id)? == Some("solid") {
+            self.store.set_suggestion(&s.id, "solid", None)?;
         }
         self.changed(&s.for_topic);
         self.ground_view(&s.for_topic)
+    }
+
+    /// A foundation's result once every question is answered.
+    pub(crate) fn ground_result(&self, suggestion_id: &str) -> Result<Option<&'static str>, AppError> {
+        let items = self.store.ground_items(suggestion_id)?;
+        let answered = items.iter().filter(|g| g.answer.is_some()).count();
+        let correct = items.iter().filter(|g| g.answer.is_some_and(|(_, c)| c)).count();
+        Ok(result(answered, correct, items.len()))
+    }
+
+    /// The suggestion a check question belongs to.
+    pub(crate) fn suggestion_of_item(&self, item_id: &str) -> Result<kizn_store::SuggestionRow, AppError> {
+        self.store
+            .suggestions(None)?
+            .into_iter()
+            .find(|s| self.store.ground_items(&s.id).is_ok_and(|items| items.iter().any(|g| g.id == item_id)))
+            .ok_or_else(|| AppError::Refused("there's no such question".into()))
     }
 
     /// "Later" (stays a suggestion on the map) or "I've got this" (dismissed).

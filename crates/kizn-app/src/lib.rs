@@ -84,6 +84,8 @@ pub struct Ctx {
     /// Conversations the tutor is answering right now, and the provider
     /// answering each (the bank writer waits for it on the same one).
     tutoring: Arc<Mutex<HashMap<String, String>>>,
+    /// Wakes the bank writer (the same one App starts).
+    bank_wake: Arc<tokio::sync::Notify>,
 }
 
 pub struct App {
@@ -120,6 +122,7 @@ impl App {
         let watcher = events::watch_config(&paths.config_dir, events.clone())
             .map_err(|e| eprintln!("kizn: not watching config.toml: {e}"))
             .ok();
+        let bank_wake = Arc::new(tokio::sync::Notify::new());
         Ok(App {
             ctx: Ctx {
                 paths,
@@ -129,9 +132,10 @@ impl App {
                 sourcing: Arc::default(),
                 tutoring: Arc::default(),
                 grounding: Arc::default(),
+                bank_wake: bank_wake.clone(),
             },
             drafting: Mutex::new(HashMap::new()),
-            bank_wake: Arc::new(tokio::sync::Notify::new()),
+            bank_wake,
             bank_started: AtomicBool::new(false),
             _watcher: watcher,
         })
@@ -215,7 +219,7 @@ impl App {
             Command::Unlink { link_id } => self.unlink(&link_id).map(|_| Reply::Done),
             Command::GetGround { topic_id } => self.ground_view(&topic_id).map(Reply::Ground),
             Command::AnswerGround { item_id, order, chosen } => {
-                self.answer_ground(&item_id, &order, chosen).map(Reply::Ground)
+                self.answer_and_prepare(&item_id, &order, chosen).map(Reply::Ground)
             }
             Command::ResolveFoundation { suggestion_id, action } => self.resolve_foundation(&suggestion_id, &action),
             Command::GetMap => self.map_view().map(Reply::Map),

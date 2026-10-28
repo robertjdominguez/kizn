@@ -140,8 +140,10 @@ pub enum Command {
         order: Vec<u32>,
         chosen: u32,
     },
-    /// What to do with a foundation: "later" (a suggestion on the map) or
-    /// "dismiss" (not needed). Starting one is StartTopic with `foundation`.
+    /// What to do with a foundation: "prepare" (kizn sets it up underneath,
+    /// in the background), "later" (a suggestion on the map) or "dismiss"
+    /// (not needed; one kizn prepared is deleted). Starting one in the
+    /// learner's own words is StartTopic with `foundation`.
     ResolveFoundation {
         suggestion_id: String,
         action: String,
@@ -590,6 +592,8 @@ pub struct MapNode {
     /// A topic's id, or a suggestion's.
     pub id: String,
     pub title: String,
+    /// A topic's origin ("learner" or "kizn"); "learner" for a suggestion.
+    pub origin: String,
     /// "topic" or "suggestion".
     pub kind: String,
     /// A topic's status ("draft", "confirmed"); "suggested" for a suggestion.
@@ -654,6 +658,8 @@ pub struct GroundView {
 #[ts(export)]
 pub struct GroundFoundation {
     pub suggestion_id: String,
+    /// Once it's a topic (kizn is preparing it, or it was started).
+    pub topic_id: Option<String>,
     pub title: String,
     pub why: Option<String>,
     /// The suggestion's status: "kept" (not checked yet), "solid" (checked,
@@ -723,6 +729,9 @@ pub struct LinkedTopic {
 pub struct TopicView {
     pub id: String,
     pub title: String,
+    /// Who set it up: "learner", or "kizn" (a foundation it prepared by
+    /// itself after checking the ground).
+    pub origin: String,
     pub goal: String,
     /// "draft" or "confirmed".
     pub status: String,
@@ -984,6 +993,9 @@ pub struct TodayView {
 pub struct TopicSummary {
     pub id: String,
     pub title: String,
+    /// Who set it up: "learner", or "kizn" (a foundation it prepared by
+    /// itself after checking the ground).
+    pub origin: String,
     pub status: String,
     /// Some outcome's bank isn't ready yet.
     pub preparing: bool,

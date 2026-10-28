@@ -455,7 +455,7 @@ impl Ctx {
             return Ok(NextStep::StartTopic);
         }
         if g.topics.is_empty()
-            && let Some(t) = all.iter().find(|t| t.status == "draft")
+            && let Some(t) = all.iter().find(|t| t.status == "draft" && t.origin == "learner")
         {
             return Ok(NextStep::FinishSetup { topic_id: t.id.clone(), title: t.title.clone() });
         }
