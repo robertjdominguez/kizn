@@ -89,14 +89,17 @@ Then("{string} seems solid and {string} might be shaky", async ({ page }, solid:
   await expect(howItWent(page, shaky)).toContainText("Might be shaky");
 });
 
-Then("{string} is on my map to start with, and {string} isn't", async ({ page }, shaky: string, solid: string) => {
-  await expect(howItWent(page, shaky)).toContainText("On your map, to start with");
-  await expect(howItWent(page, solid)).toContainText("Good ground to build on");
-  await page.getByRole("link", { name: "See where to start" }).click();
-  await expect(page.getByRole("status")).toContainText("Start here", { timeout: 15_000 });
-  await expect(page.getByRole("button", { name: `${shaky} (suggested)` })).toBeVisible();
-  await expect(page.getByRole("button", { name: `${solid} (suggested)` })).toHaveCount(0);
-});
+Then(
+  "kizn prepares {string} underneath, to start with, and not {string}",
+  async ({ page }, shaky: string, solid: string) => {
+    await expect(howItWent(page, shaky)).toContainText("kizn is preparing it");
+    await expect(howItWent(page, solid)).toContainText("Good ground to build on");
+    await page.getByRole("link", { name: "See where to start" }).click();
+    await expect(page.getByRole("status")).toContainText(`kizn is preparing ${shaky}`, { timeout: 15_000 });
+    await expect(page.getByRole("button", { name: shaky, exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: new RegExp(solid) })).toHaveCount(0);
+  },
+);
 
 // ---- flags -----------------------------------------------------------------------------
 

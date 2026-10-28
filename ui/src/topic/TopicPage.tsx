@@ -61,6 +61,8 @@ export function TopicPage({ topicId, from }: { topicId: string; from?: "map" }) 
   }, [load, topicId]);
 
   const confirmed = topic?.status === "confirmed" ? topic : null;
+  // A foundation kizn is drafting by itself: nothing to do but wait a little.
+  const preparing = topic?.status === "draft" && topic.origin === "kizn" ? topic : null;
   return (
     <Screen
       width="max-w-5xl"
@@ -94,6 +96,7 @@ export function TopicPage({ topicId, from }: { topicId: string; from?: "map" }) 
         </>
       }
     >
+      <AnimatePresence>{preparing && <Preparing key="preparing" topic={preparing} />}</AnimatePresence>
       {confirmed && (
         <Stage stagger={0.12} className="grid grid-cols-1 gap-10 lg:grid-cols-[minmax(0,1fr)_15rem]">
           <motion.div variants={stage(0.14, 0)} className="flex min-w-0 flex-col gap-8">
@@ -586,5 +589,32 @@ function DeleteTopic({ topic: t, back }: { topic: TopicView; back: string }) {
         on your map.
       </Confirm>
     </motion.div>
+  );
+}
+
+// kizn is setting the topic up by itself (a foundation the check found
+// shaky): how far it's got, and that nothing's needed from the learner.
+function Preparing({ topic: t }: { topic: TopicView }) {
+  const concepts = t.outcomes.reduce((n, o) => n + o.concepts.length, 0);
+  return (
+    <motion.section
+      variants={rise}
+      {...presence}
+      aria-label="Being prepared"
+      className="flex flex-col gap-2 rounded-2xl bg-subtle px-6 py-5 ring-1 ring-hairline"
+    >
+      <p className="text-[11px] font-semibold uppercase tracking-wider text-accent">Being prepared</p>
+      <h2 className="text-lg font-semibold text-ink">kizn is setting up {t.title}</h2>
+      <p className="flex items-center gap-2 text-sm text-ink-3">
+        <LoaderCircle size={14} className="animate-spin text-accent" aria-hidden />
+        {t.outcomes.length === 0
+          ? "Drafting what to learn…"
+          : `${plural(t.outcomes.length, "outcome")} and ${plural(concepts, "concept")} so far…`}
+      </p>
+      <p className="text-sm text-ink-3">
+        It's a foundation for what you're learning, set up in its own terms. Its first questions follow; you can close
+        kizn meanwhile.
+      </p>
+    </motion.section>
   );
 }

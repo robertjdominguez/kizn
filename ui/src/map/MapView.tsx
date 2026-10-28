@@ -143,7 +143,8 @@ function heldBack(map: MapData, added: Added): Held | null {
     if (!named || !lower) continue;
     const i = added.nodes?.indexOf(edge.lower) ?? 0;
     const alone = map.edges.filter((e) => e.lower === lower.id || e.upper === lower.id).length === 1;
-    if (lower.kind === "suggestion" && alone) held.nodes.add(lower.id);
+    // New to the map (only this link): it arrives with its link.
+    if (alone) held.nodes.add(lower.id);
     held.edges.add(edgeKey(edge));
     // Each arrival lands a beat after the one before.
     held.order.set(lower.id, Math.max(0, i));
@@ -162,8 +163,8 @@ function arrivalMessage(map: MapData, added: Added | undefined, ids: string[]): 
   if (added.from === "check") {
     return (
       <>
-        <span className="font-semibold text-ink">Start here.</span> Learning {list} first makes {upper} easier.{" "}
-        {titles.length > 1 ? "Select one to start it." : "Select it to start."}
+        <span className="font-semibold text-ink">Start here.</span> kizn is preparing {list}, so {upper} is easier to
+        build on. {titles.length > 1 ? "They're" : "It's"} ready to practise in a few minutes.
       </>
     );
   }
@@ -444,7 +445,7 @@ function Node({
       {suggestion ? (
         <span className="text-[11px] text-ink-4">suggested</span>
       ) : n.status === "draft" ? (
-        <span className="text-[11px] text-ink-4">being set up</span>
+        <span className="text-[11px] text-ink-4">{n.origin === "kizn" ? "being prepared" : "being set up"}</span>
       ) : (
         <span
           className="flex h-1.5 w-full overflow-hidden rounded-full bg-raised"
@@ -509,7 +510,7 @@ function Selected({ n, map, onClose }: { n: Placed; map: MapData | null; onClose
       ) : (
         <a
           href={
-            n.status === "draft"
+            n.status === "draft" && n.origin !== "kizn"
               ? `#/setup/${encodeURIComponent(n.id)}`
               : `#/topic/${encodeURIComponent(n.id)}?from=map`
           }
