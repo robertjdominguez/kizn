@@ -2364,14 +2364,27 @@ fn lecture_cites(w: &mut Kizn) {
     }
 }
 
-#[then("it takes on the mix-ups my wrong answers showed")]
-fn lecture_mixups(w: &mut Kizn) {
-    let (_, mixups) = w.concept_questions();
+#[then("it takes on the mistake I made")]
+fn lecture_takes_on_my_mistake(w: &mut Kizn) {
+    // The misconception behind the option I picked when I got it wrong.
+    let store = w.store();
+    let concept_id = w.missed_concept();
+    let mine: Vec<String> = store
+        .attempts(None)
+        .unwrap()
+        .into_iter()
+        .filter(|a| !a.correct)
+        .filter_map(|a| store.item(&a.item_id).ok().flatten().map(|i| (a, i)))
+        .filter(|(_, i)| i.concept_ids.first() == Some(&concept_id))
+        .filter_map(|(a, i)| {
+            let options: Vec<kizn_core::bank::ItemOption> =
+                serde_json::from_str(i.options_json.as_deref().unwrap_or("[]")).unwrap_or_default();
+            options.get(a.chosen).and_then(|o| o.misconception.clone())
+        })
+        .collect();
+    assert!(!mine.is_empty(), "my wrong pick records a misconception");
     let l = w.lecture();
-    assert!(!l.misconceptions.is_empty());
-    for m in &l.misconceptions {
-        assert!(mixups.contains(&m.belief), "{:?} is one of the questions' misconceptions", m.belief);
-    }
+    assert!(l.misconceptions.iter().any(|m| mine.contains(&m.belief)), "{:?} vs {mine:?}", l.misconceptions);
 }
 
 #[then("none of it repeats a question's wording")]
@@ -2387,7 +2400,7 @@ fn lecture_no_giveaway(w: &mut Kizn) {
 fn lecture_left_out(w: &mut Kizn) {
     let l = w.lecture();
     let texts: Vec<&str> = l.sections.iter().flat_map(|s| s.paragraphs.iter().map(|p| p.text.as_str())).collect();
-    assert!(!texts.iter().any(|t| t.starts_with("In the first source's words")), "{texts:?}");
+    assert!(!texts.iter().any(|t| t.starts_with("Start with the idea itself")), "{texts:?}");
     assert!(texts.len() >= 2);
     assert!(l.sections.iter().flat_map(|s| &s.paragraphs).all(|p| !p.notes.is_empty()));
 }
@@ -2421,4 +2434,47 @@ fn reply_about_passage(w: &mut Kizn) {
     let passage = w.goal.clone().unwrap();
     let r = w.reply();
     assert!(r.contains(&format!("On \"{passage}")), "{r}");
+}
+
+#[given("an author that can search the web")]
+async fn author_that_searches(w: &mut Kizn) {
+    let url = w.fake.anthropic_url(Behaviour::Works);
+    w.add_provider("claude", "anthropic", &url, "claude-sonnet-5", Some(TEST_KEY)).await;
+    w.settings_from(Command::TestProvider { name: "claude".into() }).await;
+    let r = w.command(Command::AssignRole { role: Role::Author, provider: Some("claude".into()) }).await;
+    assert!(r.is_ok(), "{r:?}");
+}
+
+#[then("its sources were found by searching the web")]
+fn found_by_search(w: &mut Kizn) {
+    let asked = w.fake.last_input("find-sources").expect("kizn searched");
+    assert_eq!(asked["concept"].as_str(), Some(w.concept.as_ref().unwrap().statement.as_str()));
+    assert!(w.concept.as_ref().unwrap().sources.iter().any(|s| s.url.contains("docs.example.org")));
+}
+
+#[then("a page written for specialists isn't offered, and kizn says why")]
+fn specialist_page_refused(w: &mut Kizn) {
+    let c = w.concept.as_ref().unwrap();
+    assert!(!c.sources.iter().any(|s| s.url.contains("reference.example.org")), "{:?}", c.sources);
+    let rows = w.store().sources(&c.concept_id).unwrap();
+    let row = rows.iter().find(|r| r.url.contains("reference.example.org")).expect("it was checked");
+    assert_eq!(row.status, "rejected");
+    assert!(row.reason.as_deref().unwrap_or("").starts_with("not a fit"), "{row:?}");
+}
+
+#[when("I ask for its lecture to be written again")]
+async fn rewrite_lecture(w: &mut Kizn) {
+    let concept_id = w.missed_concept();
+    let before: Vec<String> = w.store().sources(&concept_id).unwrap().into_iter().map(|s| s.id).collect();
+    w.goal = Some(before.join(","));
+    w.concept_from(Command::RewriteLecture { concept_id }).await;
+}
+
+#[then("kizn looks for its sources afresh and writes it again")]
+async fn rewritten(w: &mut Kizn) {
+    let before: Vec<String> = w.goal.clone().unwrap().split(',').map(str::to_string).collect();
+    lecture_written(w).await;
+    w.lecture();
+    let after: Vec<String> = w.store().sources(&w.missed_concept()).unwrap().into_iter().map(|s| s.id).collect();
+    assert!(!after.is_empty() && after.iter().all(|a| !before.contains(a)), "new sources: {before:?} -> {after:?}");
 }

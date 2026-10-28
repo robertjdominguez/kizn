@@ -15,7 +15,7 @@ mod sse;
 #[cfg(feature = "fake")]
 pub mod fake;
 
-pub use client::{Client, Endpoint, Http, JsonMode, Page, Protocol, REDIRECT_HOST_HEADER, Turn, Usage};
+pub use client::{Client, Endpoint, Found, Http, JsonMode, Page, Protocol, REDIRECT_HOST_HEADER, Turn, Usage};
 pub use error::ModelError;
 pub use probe::{Check, Structured, probe};
 pub use reqwest;

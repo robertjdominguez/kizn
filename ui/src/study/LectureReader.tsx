@@ -1,7 +1,8 @@
-import { ArrowLeft, Check, ExternalLink, FileText, MessageCircle, Play, X } from "lucide-react";
+import { ArrowLeft, Check, ExternalLink, FileText, MessageCircle, Play, RotateCw, X } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
-import { Fragment, useEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import type { LectureView } from "../bindings/LectureView";
+import { Confirm } from "../components/Confirm";
 import { openExternal } from "../external";
 import { EASE, GLIDE, pop, stage } from "../motion";
 import { call } from "../rpc";
@@ -63,6 +64,8 @@ function Read({
   askingNow.current = asking !== null;
   const [talks, recount] = useConversations({ kind: "concept", concept_id: conceptId });
   const [picked, setPicked] = useState<{ text: string; x: number; y: number } | null>(null);
+  const [rewriting, setRewriting] = useState(false);
+  const closeRewrite = useCallback(() => setRewriting(false), []);
   // The footnote just jumped to, briefly lit.
   const [lit, setLit] = useState<number | null>(null);
   const article = useRef<HTMLElement>(null);
@@ -132,6 +135,13 @@ function Read({
         <span className="flex-1" />
         <button
           type="button"
+          onClick={() => setRewriting(true)}
+          className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-ink-3 transition-colors hover:bg-raised hover:text-ink"
+        >
+          <RotateCw size={12} aria-hidden /> Write again
+        </button>
+        <button
+          type="button"
           onClick={() => setAsking({ passage: null })}
           className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-ink-3 transition-colors hover:bg-raised hover:text-ink"
         >
@@ -148,8 +158,8 @@ function Read({
         >
           <article ref={article} className="flex min-w-0 flex-col gap-9">
             <motion.div variants={pop} className="flex flex-col gap-2 border-b border-hairline pb-6">
-              <p className="text-[11px] font-semibold uppercase tracking-wider text-accent">Reading for</p>
-              <h1 className="text-xl font-semibold leading-snug text-ink">{concept}</h1>
+              <h1 className="text-2xl font-semibold leading-snug tracking-tight text-ink">{l.title || concept}</h1>
+              {l.title && <p className="text-sm text-ink-3">{concept}</p>}
               <p className="text-xs text-ink-4">
                 From {l.footnotes.length} sources kizn read · every part checked against what it cites
               </p>
@@ -282,6 +292,19 @@ function Read({
           </motion.button>
         )}
       </AnimatePresence>
+      <Confirm
+        open={rewriting}
+        title="Write this reading again?"
+        action="Write again"
+        onClose={closeRewrite}
+        onConfirm={async () => {
+          await call({ type: "rewrite_lecture", concept_id: conceptId });
+          setRewriting(false);
+          onClose();
+        }}
+      >
+        kizn searches for sources afresh (keeping any you added) and writes it from scratch. It takes a minute or two.
+      </Confirm>
       <TutorSheet
         anchor={asking ? { kind: "concept", concept_id: conceptId } : null}
         passage={asking?.passage}

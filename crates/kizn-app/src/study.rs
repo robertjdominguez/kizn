@@ -19,7 +19,7 @@ use crate::practice::days_until;
 use crate::{AppError, Ctx};
 
 /// Verified resources offered per concept.
-pub const MAX_VERIFIED: usize = 3;
+pub const MAX_VERIFIED: usize = 4;
 const FETCH_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_PAGE_BYTES: usize = 2 * 1024 * 1024;
 
@@ -31,6 +31,33 @@ You suggest resources an adult learner can use to learn one concept, in any subj
 - Up to 6, each a different URL than those listed as tried (those failed: don't guess near them).
 - \"why\": one line on what the learner gets from it.
 Reply with JSON only: {\"sources\": [{\"url\": \"https://...\", \"title\": \"...\", \"why\": \"...\"}]}";
+
+const FIND_SOURCES: &str = "kizn-task: find-sources
+Search the web for resources that teach one concept well to one adult learner, in any subject: clear explanations, tutorials, open course material, encyclopedia articles, and YouTube talks or demonstrations (with captions). Not API references, changelogs, forum threads, paywalled or login-only pages, or PDFs. Search two or three times with different wording, then stop: kizn opens and checks each page you found itself.";
+
+const JUDGE_SOURCE: &str = "kizn-task: judge-source
+Would this page help this learner understand this concept? \"explains\": it explains the concept (what it is, how or why), rather than only mentioning it. \"fits\": false only when it's plainly not for learning, such as a reference listing (settings, system tables, API signatures, config snippets) with little explanation; technical depth is fine when it explains. Judge from the excerpts given; when in doubt, it fits.
+Reply with JSON only: {\"explains\": true, \"fits\": true, \"why\": \"...\"}";
+
+fn judge_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {"explains": {"type": "boolean"}, "fits": {"type": "boolean"}, "why": {"type": "string"}},
+        "required": ["explains", "fits", "why"], "additionalProperties": false
+    })
+}
+
+/// The stretches of a source's text that best match `query`.
+pub(crate) fn excerpts_of(kind: &str, content: &str, query: &str, n: usize) -> Vec<String> {
+    let chunks = if kind == "video" {
+        let cues: Vec<kizn_core::source::Cue> = serde_json::from_str(content).unwrap_or_default();
+        kizn_core::source::cue_chunks(&cues, 60.0)
+    } else {
+        let blocks: Vec<kizn_core::source::Block> = serde_json::from_str(content).unwrap_or_default();
+        kizn_core::source::page_chunks(&blocks, 120)
+    };
+    kizn_core::source::relevant(&chunks, query, n).into_iter().map(|c| c.text).collect()
+}
 
 fn sources_schema() -> Value {
     json!({"type": "object", "properties": {"sources": {"type": "array", "items": {"type": "object"}}}, "required": ["sources"]})
@@ -354,6 +381,17 @@ impl Ctx {
         Ok(page)
     }
 
+    /// Starts the lecture over: kizn's sources set aside (the learner's own
+    /// kept), the old lecture gone, then a fresh search and a new lecture.
+    pub(crate) fn rewrite_lecture(&self, concept_id: &str) -> Result<ConceptPageView, AppError> {
+        if self.sourcing.lock().unwrap().contains(concept_id) || self.lecturing.lock().unwrap().contains(concept_id) {
+            return Err(AppError::Refused("kizn is already working on this one's reading".into()));
+        }
+        self.store.forget_lecture(concept_id)?;
+        self.start_finding(concept_id);
+        self.concept_page(concept_id)
+    }
+
     /// Looks again for sources; the lecture is written again from them.
     pub(crate) fn find_again(&self, concept_id: &str) -> Result<ConceptPageView, AppError> {
         self.start_finding(concept_id);
@@ -397,9 +435,13 @@ impl Ctx {
         }
     }
 
-    /// Looks for resources: a second round, told what failed, when the first
-    /// finds nothing kizn can use.
+    /// Looks for resources: with a web search where a provider has one (a
+    /// model's memory of URLs is often stale or off), then, if that's not
+    /// enough, suggested from memory, with a second round told what failed.
     async fn find_sources(&self, concept_id: &str) -> Result<(), AppError> {
+        if let Some(searcher) = self.searcher() {
+            self.search_round(concept_id, &searcher).await?;
+        }
         for _ in 0..2 {
             if self.suggest_round(concept_id).await? > 0 {
                 break;
@@ -410,6 +452,103 @@ impl Ctx {
             }
         }
         Ok(())
+    }
+
+    /// A role's model whose provider can search the web: the tutor's, else
+    /// the author's, else the checker's.
+    fn searcher(&self) -> Option<crate::topics::RoleModel> {
+        [Role::Tutor, Role::Author, Role::Checker]
+            .into_iter()
+            .filter_map(|r| self.role_model(r).ok())
+            .find(|m| m.client.can_search())
+    }
+
+    /// One search: the model searches, kizn checks and judges what it found.
+    /// Returns how many passed.
+    async fn search_round(&self, concept_id: &str, searcher: &crate::topics::RoleModel) -> Result<usize, AppError> {
+        let concept = self.store.concept(concept_id)?.ok_or_else(|| AppError::Refused("no such concept".into()))?;
+        let outcome = self.store.outcome(&concept.outcome_id)?.ok_or_else(|| AppError::Refused("no outcome".into()))?;
+        let topic = self.store.topic(&outcome.topic_id)?.ok_or_else(|| AppError::Refused("no topic".into()))?;
+        let tried = self.store.sources(concept_id)?;
+        let mut verified = tried.iter().filter(|s| s.status == "verified").count();
+        let before = verified;
+        if verified >= MAX_VERIFIED {
+            return Ok(0);
+        }
+        let ask = format!(
+            "Find resources to learn this concept: \"{}\".\n\n<input>\n{}\n</input>",
+            concept.statement,
+            json!({ "topic": topic.title, "goal": topic.goal, "outcome": outcome.statement, "concept": concept.statement })
+        );
+        let found = match searcher.client.search(FIND_SOURCES, &ask, 3).await {
+            Ok((found, _)) => found,
+            Err(e) => {
+                eprintln!("kizn: searching for sources: {e}");
+                return Ok(0);
+            }
+        };
+        for f in found.iter().take(10) {
+            if verified >= MAX_VERIFIED {
+                break;
+            }
+            if tried.iter().any(|t| t.url == f.url) || !(f.url.starts_with("https://") || f.url.starts_with("http://"))
+            {
+                continue;
+            }
+            let title = Some(f.title.clone()).filter(|t| !t.trim().is_empty());
+            if self.check_and_keep(concept_id, &f.url, title, None).await? {
+                verified += 1;
+            }
+        }
+        Ok(verified - before)
+    }
+
+    /// Fetches and checks a resource, has the checker judge whether it
+    /// explains the concept at the learner's level, and keeps the result.
+    /// Returns whether it can be offered.
+    async fn check_and_keep(
+        &self,
+        concept_id: &str,
+        url: &str,
+        title: Option<String>,
+        why: Option<&str>,
+    ) -> Result<bool, AppError> {
+        let concept = self.store.concept(concept_id)?.ok_or_else(|| AppError::Refused("no such concept".into()))?;
+        let mut checked = self.check_resource(url, &concept.statement).await;
+        let title = title.or(checked.title.clone());
+        if checked.status == "verified"
+            && let Some(why_not) = self.judged_unfit(concept_id, url, title.as_deref(), &checked).await
+        {
+            checked.status = "rejected";
+            checked.reason = Some(format!("not a fit: {why_not}"));
+        }
+        let ok = checked.status == "verified";
+        self.store.insert_source(&checked.row(self.id(), concept_id, url, title, why, "kizn", self.now()))?;
+        Ok(ok)
+    }
+
+    /// Why the checker finds a page won't help this learner with this
+    /// concept, or nothing if it will (or can't be asked).
+    async fn judged_unfit(
+        &self,
+        concept_id: &str,
+        url: &str,
+        title: Option<&str>,
+        checked: &Checked,
+    ) -> Option<String> {
+        let concept = self.store.concept(concept_id).ok()??;
+        let outcome = self.store.outcome(&concept.outcome_id).ok()??;
+        let topic = self.store.topic(&outcome.topic_id).ok()??;
+        let checker = self.role_model(Role::Checker).ok()?;
+        let excerpts = excerpts_of(checked.kind, checked.content.as_deref()?, &concept.statement, 3);
+        let ask = format!(
+            "<input>\n{}\n</input>",
+            json!({ "goal": topic.goal, "outcome": outcome.statement, "concept": concept.statement,
+                    "url": url, "title": title, "excerpts": excerpts })
+        );
+        let (reply, _) = checker.client.complete_json(JUDGE_SOURCE, &ask, &judge_schema(), checker.mode).await.ok()?;
+        let fits = reply["explains"].as_bool().unwrap_or(true) && reply["fits"].as_bool().unwrap_or(true);
+        (!fits).then(|| reply["why"].as_str().unwrap_or("the checker says it won't help").to_string())
     }
 
     /// One round: the tutor suggests, kizn checks. Returns how many passed.
@@ -467,20 +606,8 @@ impl Ctx {
             if tried.iter().any(|t| t.url == url) {
                 continue;
             }
-            let checked = self.check_resource(url, &concept.statement).await;
-            let title =
-                c["title"].as_str().map(str::to_string).filter(|t| !t.trim().is_empty()).or(checked.title.clone());
-            let ok = checked.status == "verified";
-            self.store.insert_source(&checked.row(
-                self.id(),
-                concept_id,
-                url,
-                title,
-                c["why"].as_str(),
-                "kizn",
-                self.now(),
-            ))?;
-            if ok {
+            let title = c["title"].as_str().map(str::to_string).filter(|t| !t.trim().is_empty());
+            if self.check_and_keep(concept_id, url, title, c["why"].as_str()).await? {
                 verified += 1;
             }
         }

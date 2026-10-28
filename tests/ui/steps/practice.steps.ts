@@ -504,7 +504,7 @@ async function openLecture(page: Page) {
 /** Selects a paragraph of the lecture and asks about it. */
 async function askAboutPassage(page: Page, text: string) {
   await openLecture(page);
-  const para = lecture(page).locator("article p", { hasText: "source" }).first();
+  const para = lecture(page).locator("article section p").first();
   await expect(para).toBeVisible();
   // Select the paragraph (the reader follows the selection, however it's made).
   await para.evaluate((p) => {
@@ -515,7 +515,8 @@ async function askAboutPassage(page: Page, text: string) {
     sel?.addRange(range);
   });
   await page.getByRole("button", { name: "Ask about the selection" }).click();
-  await expect(tutor(page).locator("blockquote")).toContainText("source");
+  const picked = ((await para.textContent()) ?? "").slice(0, 20);
+  await expect(tutor(page).locator("blockquote")).toContainText(picked);
   await askInSheet(page, text, "About");
 }
 
@@ -557,7 +558,7 @@ Then("every paragraph, key term and mix-up cites the sources kizn read", async (
   await expect(sources.first()).toContainText("docs.example.org");
 });
 
-Then("it takes on the mix-ups my wrong answers showed", async ({ page }) => {
+Then("it takes on the mistake I made", async ({ page }) => {
   await expect(lecture(page).getByRole("region", { name: "Where people go wrong" })).toBeVisible();
 });
 
@@ -699,4 +700,16 @@ When("I mark one of them studied", async ({ page }) => {
 Then("the reading list shows {int} of {int} studied", async ({ page }, a: number, b: number) => {
   await expect(readingList(page)).toContainText(`${a} of ${b} studied`);
   await expect(readingList(page).getByLabel("Studied", { exact: true })).toHaveCount(a);
+});
+
+When("I ask for its lecture to be written again", async ({ page }) => {
+  await openLecture(page);
+  await lecture(page).getByRole("button", { name: "Write again" }).click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "Write again" }).click();
+  await expect(lecture(page)).toHaveCount(0);
+});
+
+Then("kizn looks for its sources afresh and writes it again", async ({ page }) => {
+  // Back on the concept's sheet: the reading is found and written again.
+  await expect(sheet(page).getByRole("button", { name: /Read the lecture/ })).toBeVisible({ timeout: 30_000 });
 });

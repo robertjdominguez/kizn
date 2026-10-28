@@ -138,15 +138,73 @@ impl Default for Http {
     }
 }
 
+#[derive(Clone)]
 pub struct Client {
     endpoint: Endpoint,
     http: Http,
     timeout: Duration,
+    /// Most tokens a JSON reply may run to (Anthropic needs a cap).
+    max_tokens: u32,
+}
+
+/// A page the provider's web search found.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Found {
+    pub url: String,
+    pub title: String,
 }
 
 impl Client {
     pub fn new(endpoint: Endpoint, http: Http) -> Client {
-        Client { endpoint, http, timeout: Duration::from_secs(20) }
+        Client { endpoint, http, timeout: Duration::from_secs(20), max_tokens: 2048 }
+    }
+
+    /// For long replies (a lecture): room for more tokens than the default.
+    pub fn with_max_tokens(mut self, max_tokens: u32) -> Client {
+        self.max_tokens = max_tokens;
+        self
+    }
+
+    /// Whether `search` can work: the provider has web search of its own.
+    pub fn can_search(&self) -> bool {
+        self.endpoint.protocol == Protocol::Anthropic
+    }
+
+    /// Searches the web with the provider's own search tool (Anthropic's
+    /// server-side web search, up to `max_uses` searches), and returns the
+    /// pages it found, in order, without repeats. kizn fetches and checks
+    /// each itself; the model only looks.
+    pub async fn search(&self, system: &str, user: &str, max_uses: u32) -> Result<(Vec<Found>, Usage), ModelError> {
+        if !self.can_search() {
+            return Err(ModelError::NoSearch);
+        }
+        let body = json!({
+            "model": self.endpoint.model,
+            "max_tokens": 1024,
+            "system": system,
+            "messages": [{"role": "user", "content": user}],
+            "tools": [{"type": "web_search_20250305", "name": "web_search", "max_uses": max_uses}],
+        });
+        let v = self.post_json("messages", &body, JsonMode::Prompted).await?;
+        let usage = Usage {
+            prompt_tokens: v.pointer("/usage/input_tokens").and_then(|n| n.as_u64()).unwrap_or(0),
+            completion_tokens: v.pointer("/usage/output_tokens").and_then(|n| n.as_u64()).unwrap_or(0),
+        };
+        let mut found: Vec<Found> = vec![];
+        for block in v.get("content").and_then(|c| c.as_array()).into_iter().flatten() {
+            if block["type"] != "web_search_tool_result" {
+                continue;
+            }
+            for r in block["content"].as_array().into_iter().flatten() {
+                let (Some(url), title) = (r["url"].as_str(), r["title"].as_str().unwrap_or("")) else {
+                    continue;
+                };
+                if !found.iter().any(|f| f.url == url) {
+                    found.push(Found { url: url.to_string(), title: title.to_string() });
+                }
+            }
+        }
+        Ok((found, usage))
     }
 
     pub fn with_timeout(mut self, timeout: Duration) -> Client {
@@ -283,7 +341,7 @@ impl Client {
             Protocol::Anthropic => {
                 let mut body = json!({
                     "model": self.endpoint.model,
-                    "max_tokens": 2048,
+                    "max_tokens": self.max_tokens,
                     "system": system,
                     "messages": [{"role": "user", "content": user}],
                 });

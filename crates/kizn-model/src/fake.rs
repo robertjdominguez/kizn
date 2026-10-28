@@ -377,6 +377,28 @@ fn anthropic(b: Behaviour, req: &Value, answer: Option<Value>) -> Response {
         events.push(json!({"type": "message_stop"}).to_string());
         return sse_paced(events, words.len() > 2, b == Behaviour::Slow);
     }
+    // A web search (Anthropic's server tool): what it found, as search results.
+    let searching = req["tools"]
+        .as_array()
+        .is_some_and(|t| t.iter().any(|x| x["type"].as_str().is_some_and(|y| y.starts_with("web_search"))));
+    if searching {
+        let results: Vec<Value> = answer
+            .as_ref()
+            .and_then(|a| a["results"].as_array().cloned())
+            .unwrap_or_default()
+            .into_iter()
+            .map(|r| json!({"type": "web_search_result", "url": r["url"], "title": r["title"]}))
+            .collect();
+        return axum::Json(json!({
+            "content": [
+                {"type": "server_tool_use", "name": "web_search", "input": {"query": "…"}},
+                {"type": "web_search_tool_result", "content": results},
+                {"type": "text", "text": "Here's what I found."}
+            ],
+            "usage": {"input_tokens": 200, "output_tokens": 20}
+        }))
+        .into_response();
+    }
     let tools = !req["tools"].is_null();
     let answer = answer.unwrap_or_else(|| json!({"ok": true, "word": "kizn"}));
     let content = match (b, tools) {
@@ -396,6 +418,10 @@ fn anthropic(b: Behaviour, req: &Value, answer: Option<Value>) -> Response {
 // answers each with valid JSON built from those inputs.
 
 pub const TASK_MARKER: &str = "kizn-task:";
+
+fn slug(s: &str) -> String {
+    s.chars().map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '-' }).collect()
+}
 
 fn kizn_task(req: &Value) -> Option<(String, Value)> {
     let text = req.to_string();
@@ -577,53 +603,78 @@ impl FakeServer {
                     {"title": named("Networking basics"), "why": "services talk over ports and addresses"},
                 ]}))
             }
-            // A lecture citing the sources it was given: two sections, a key
-            // term, and each misconception listed taken on.
+            // What a web search finds for a concept: a good page, a video, a
+            // reference pitched wrong for a learner, a dead link and an app
+            // shell. kizn should keep the first two.
+            "find-sources" => {
+                let concept = s("concept");
+                let slug = slug(&concept);
+                Some(json!({ "results": [
+                    {"url": format!("https://docs.example.org/web/article/{slug}"), "title": format!("{concept}: the guide")},
+                    {"url": format!("https://reference.example.org/web/article/{slug}"), "title": format!("{concept}: compiler reference")},
+                    {"url": "https://old.example.org/web/missing", "title": "Archived notes"},
+                    {"url": format!("https://www.youtube.com/watch?v=captioned-{slug}"), "title": format!("{concept}, shown")},
+                    {"url": "https://learn.example.com/web/shell", "title": "Interactive course"},
+                    {"url": format!("https://blog.example.net/web/article/{slug}"), "title": format!("Understanding {concept}")},
+                ]}))
+            }
+            // Whether a page explains the concept for this learner: the
+            // reference site is written for implementers, not learners.
+            "judge-source" => {
+                let fits = !s("url").contains("reference.example.org");
+                Some(json!({
+                    "explains": fits,
+                    "fits": fits,
+                    "why": if fits { "it explains the idea plainly, with an example" } else { "a reference for implementers, not an explanation" },
+                }))
+            }
+            // A lecture taught from what the model knows: a title, a key
+            // term, two sections, and the learner's own mix-up taken on.
             "write-lecture" => {
                 let concept = s("concept");
-                let ids: Vec<String> = input["sources"]
-                    .as_array()
-                    .map(|a| a.iter().filter_map(|x| x["id"].as_str().map(str::to_string)).collect())
-                    .unwrap_or_default();
-                let first = ids.first().cloned().unwrap_or_default();
-                let second = ids.get(1).cloned().unwrap_or_else(|| first.clone());
-                let mixups: Vec<Value> = input["misconceptions"]
+                let mixups: Vec<Value> = input["learner_mixups"]
                     .as_array()
                     .map(|a| {
                         a.iter()
-                            .take(2)
                             .filter_map(|m| m.as_str())
-                            .map(|m| {
-                                json!({"belief": m, "correction": format!("The sources say otherwise about {concept}."), "cites": [second]})
-                            })
+                            .map(|m| json!({"belief": m, "correction": format!("In fact {concept}, as the example shows."), "cites": []}))
                             .collect()
                     })
                     .unwrap_or_default();
                 Some(json!({
-                    "key_terms": [{"term": concept, "meaning": format!("what the sources describe as {concept}"), "cites": [first]}],
+                    "title": format!("Getting to grips with {concept}"),
+                    "key_terms": [{"term": concept, "meaning": format!("the idea that {concept}"), "cites": []}],
                     "sections": [
                         {"heading": "What it is", "paragraphs": [
-                            {"text": format!("In the first source's words, {concept} comes first."), "cites": [first]},
-                            {"text": format!("The second source adds how {concept} works in use."), "cites": [second]}
+                            {"text": format!("Start with the idea itself: {concept}, put plainly."), "cites": []},
+                            {"text": format!("Then how {concept} works when you use it, step by step."), "cites": []}
                         ]},
                         {"heading": "Why it matters", "paragraphs": [
-                            {"text": format!("Both sources tie {concept} to everyday work."), "cites": [first, second]}
+                            {"text": format!("Seeing {concept} at work makes the rest of the topic easier."), "cites": []}
                         ]}
                     ],
                     "misconceptions": mixups,
                 }))
             }
-            // Every claim supported, unless it's a doubting checker: then the
-            // first paragraph never is.
-            "verify-lecture" => {
+            // Which of its candidate passages back each claim: all of them,
+            // unless it's a doubting checker (then the first paragraph never is).
+            "back-claims" => {
                 let verdicts: Vec<Value> = input["claims"]
                     .as_array()
                     .map(|a| {
                         a.iter()
-                            .filter_map(|c| c["id"].as_str())
-                            .map(|id| {
-                                let ok = !(b == Behaviour::CheckerDisagrees && id == "p0.0");
-                                json!({"id": id, "supported": ok, "why": if ok { "the excerpts say so" } else { "not in the excerpts" }})
+                            .map(|c| {
+                                let id = c["id"].as_str().unwrap_or("");
+                                let mut sources: Vec<String> = c["candidates"]
+                                    .as_array()
+                                    .map(|x| {
+                                        x.iter().filter_map(|p| p["source"].as_str().map(str::to_string)).collect()
+                                    })
+                                    .unwrap_or_default();
+                                sources.dedup();
+                                let ok = !(b == Behaviour::CheckerDisagrees && id == "p0.0") && !sources.is_empty();
+                                json!({"id": id, "supported": ok, "sources": if ok { sources } else { vec![] },
+                                       "why": if ok { "the passages say so" } else { "no passage says this" }})
                             })
                             .collect()
                     })

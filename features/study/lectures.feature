@@ -11,8 +11,22 @@ Feature: A lecture for each concept
     Given I missed a concept in my starting point
     When I open it and its lecture is written
     Then every paragraph, key term and mix-up cites the sources kizn read
-    And it takes on the mix-ups my wrong answers showed
+    And it takes on the mistake I made
     And none of it repeats a question's wording
+
+  @domain
+  Scenario: Sources are searched for, and judged
+    Given an author that can search the web
+    And I missed a concept in my starting point
+    When I open it and its lecture is written
+    Then its sources were found by searching the web
+    And a page written for specialists isn't offered, and kizn says why
+
+  @domain @ui
+  Scenario: Writing a lecture again
+    Given a concept with a lecture
+    When I ask for its lecture to be written again
+    Then kizn looks for its sources afresh and writes it again
 
   @domain
   Scenario: What its sources don't back is left out

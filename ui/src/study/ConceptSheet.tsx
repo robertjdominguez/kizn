@@ -92,7 +92,7 @@ function Sheet({ conceptId, onClose }: { conceptId: string; onClose: () => void 
     };
   }, [load, onClose]);
 
-  const act = (type: "mark_studied" | "find_sources") => {
+  const act = (type: "mark_studied" | "find_sources" | "rewrite_lecture") => {
     setBusy(true);
     call({ type, concept_id: conceptId })
       .then(setC)
@@ -150,7 +150,12 @@ function Sheet({ conceptId, onClose }: { conceptId: string; onClose: () => void 
               </h3>
               <AnimatePresence mode="wait" initial={false}>
                 <motion.div key={readingState(c)} variants={fade} {...presence}>
-                  <ReadingCard c={c} busy={busy} onRead={() => setReading(true)} onAgain={() => act("find_sources")} />
+                  <ReadingCard
+                    c={c}
+                    busy={busy}
+                    onRead={() => setReading(true)}
+                    onAgain={() => act("rewrite_lecture")}
+                  />
                 </motion.div>
               </AnimatePresence>
             </motion.section>

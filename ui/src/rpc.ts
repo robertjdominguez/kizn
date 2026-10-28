@@ -35,6 +35,7 @@ const REPLY = {
   get_progress: "progress",
   get_concept: "concept",
   find_sources: "concept",
+  rewrite_lecture: "concept",
   mark_studied: "concept",
   dispute: "disputed",
   ask: "thread",

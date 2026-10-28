@@ -46,7 +46,7 @@ export function Confirm({
         <motion.div
           variants={fade}
           {...presence}
-          className="fixed inset-0 z-40 flex items-start justify-center bg-crust/60 px-4 pt-24"
+          className="fixed inset-0 z-[60] flex items-start justify-center bg-crust/60 px-4 pt-24"
           onClick={onClose}
         >
           <motion.div
