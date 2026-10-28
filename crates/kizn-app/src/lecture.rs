@@ -13,53 +13,39 @@ use crate::command::{FootnoteView, LectureView, MixUpView, ParagraphView, Role, 
 use crate::{AppError, Ctx};
 
 const WRITE_LECTURE: &str = "kizn-task: write-lecture
-You write a lecture for one adult learner on ONE concept, to read when they need it (often after missing a question on it). Teach it in depth: what it is, how it works, why it matters for what they're learning, a concrete example, and where people go wrong.
+You write a lecture for one adult learner on ONE concept, to read when they need it (often right after missing a question on it). Teach it the way a good teacher would for what they're learning and why: what it is, how it works, why it matters for their goal, a concrete example, and where people go wrong. Pitch it at the level their goal and outcome need: build intuition before detail, and leave out implementation trivia their goal doesn't call for.
 
 Rules:
-- Write from the excerpts of the sources given. You may use your own knowledge to explain and connect, but every paragraph, key term and mix-up must be supported by the excerpts it cites. Cite sources by their id (\"s1\").
-- Cite at least two different sources across the lecture.
+- \"title\": a short title for the reading (a few words), not the concept's whole statement.
 - 3 to 6 key terms, each with a plain meaning.
-- 2 to 4 sections, each with 1 to 3 short paragraphs.
-- In \"misconceptions\", take on the mistaken beliefs listed: the belief, then what's true, with cites.
-- Don't write practice questions and don't echo answer options: this is for understanding, not for recognising answers.
+- 2 to 4 sections, each with 1 to 3 short paragraphs. Each paragraph makes one or two clear, checkable points: kizn backs every part with sources afterwards, and leaves out what it can't back, so stick to what's well established.
+- In \"misconceptions\", take on the mistaken beliefs listed under \"learner_mixups\" (what this learner got wrong): the belief, then what's true and why. None listed: the one or two mistakes people most often make about it.
+- Don't name sources in the text, don't write practice questions, and don't echo answer options.
 - If \"supports\" lists topics, explain the concept in its own terms; one of them may appear as one example among others.
 
-Reply with JSON only: {\"key_terms\": [{\"term\": \"...\", \"meaning\": \"...\", \"cites\": [\"s1\"]}], \"sections\": [{\"heading\": \"...\", \"paragraphs\": [{\"text\": \"...\", \"cites\": [\"s1\", \"s2\"]}]}], \"misconceptions\": [{\"belief\": \"...\", \"correction\": \"...\", \"cites\": [\"s2\"]}]}";
+Reply with JSON only: {\"title\": \"...\", \"key_terms\": [{\"term\": \"...\", \"meaning\": \"...\"}], \"sections\": [{\"heading\": \"...\", \"paragraphs\": [{\"text\": \"...\"}]}], \"misconceptions\": [{\"belief\": \"...\", \"correction\": \"...\"}]}";
 
-const VERIFY_LECTURE: &str = "kizn-task: verify-lecture
-For each claim, say whether the excerpts it cites support it: every fact in it is stated in, or directly follows from, those excerpts. Rephrasing or explaining supported facts is fine; a fact the excerpts don't contain is not supported, however well known.
+const BACK_CLAIMS: &str = "kizn-task: back-claims
+For each claim, say which of its candidate passages back it: every fact in the claim is stated in, or follows directly from, those passages. Rephrasing or explaining backed facts is fine; a fact no passage contains is not backed, however well known. List the sources (\"s1\"…) of the passages that back it.
 
-Reply with JSON only: {\"verdicts\": [{\"id\": \"p0.0\", \"supported\": true, \"why\": \"...\"}]}";
-
-fn cites() -> Value {
-    json!({"type": "array", "items": {"type": "string"}})
-}
+Reply with JSON only: {\"verdicts\": [{\"id\": \"p0.0\", \"supported\": true, \"sources\": [\"s1\"], \"why\": \"...\"}]}";
 
 fn lecture_schema() -> Value {
+    let item = |props: Value, required: Value| json!({"type": "object", "properties": props, "required": required, "additionalProperties": false});
     json!({
         "type": "object",
         "properties": {
-            "key_terms": {"type": "array", "items": {
-                "type": "object",
-                "properties": {"term": {"type": "string"}, "meaning": {"type": "string"}, "cites": cites()},
-                "required": ["term", "meaning", "cites"], "additionalProperties": false
-            }},
-            "sections": {"type": "array", "items": {
-                "type": "object",
-                "properties": {"heading": {"type": "string"}, "paragraphs": {"type": "array", "items": {
-                    "type": "object",
-                    "properties": {"text": {"type": "string"}, "cites": cites()},
-                    "required": ["text", "cites"], "additionalProperties": false
-                }}},
-                "required": ["heading", "paragraphs"], "additionalProperties": false
-            }},
-            "misconceptions": {"type": "array", "items": {
-                "type": "object",
-                "properties": {"belief": {"type": "string"}, "correction": {"type": "string"}, "cites": cites()},
-                "required": ["belief", "correction", "cites"], "additionalProperties": false
-            }}
+            "title": {"type": "string"},
+            "key_terms": {"type": "array", "items": item(
+                json!({"term": {"type": "string"}, "meaning": {"type": "string"}}), json!(["term", "meaning"]))},
+            "sections": {"type": "array", "items": item(
+                json!({"heading": {"type": "string"}, "paragraphs": {"type": "array", "items": item(
+                    json!({"text": {"type": "string"}}), json!(["text"]))}}),
+                json!(["heading", "paragraphs"]))},
+            "misconceptions": {"type": "array", "items": item(
+                json!({"belief": {"type": "string"}, "correction": {"type": "string"}}), json!(["belief", "correction"]))}
         },
-        "required": ["key_terms", "sections", "misconceptions"], "additionalProperties": false
+        "required": ["title", "key_terms", "sections", "misconceptions"], "additionalProperties": false
     })
 }
 
@@ -68,19 +54,31 @@ fn verdicts_schema() -> Value {
         "type": "object",
         "properties": {"verdicts": {"type": "array", "items": {
             "type": "object",
-            "properties": {"id": {"type": "string"}, "supported": {"type": "boolean"}, "why": {"type": "string"}},
-            "required": ["id", "supported", "why"], "additionalProperties": false
+            "properties": {
+                "id": {"type": "string"}, "supported": {"type": "boolean"},
+                "sources": {"type": "array", "items": {"type": "string"}}, "why": {"type": "string"}
+            },
+            "required": ["id", "supported", "sources", "why"], "additionalProperties": false
         }}},
         "required": ["verdicts"], "additionalProperties": false
     })
 }
 
-/// A source as the author sees it: a short id, its title and excerpts.
+/// A source a lecture can cite: a short id for the checker, and its text.
 struct Held {
     short: String,
     source_id: String,
-    title: String,
-    excerpts: Vec<String>,
+    kind: String,
+    content: String,
+}
+
+/// A claim's candidate passages: the best match for it from each source.
+fn candidates(held: &[Held], claim: &str) -> Vec<(String, String)> {
+    held.iter()
+        .flat_map(|h| {
+            crate::study::excerpts_of(&h.kind, &h.content, claim, 2).into_iter().map(|t| (h.short.clone(), t))
+        })
+        .collect()
 }
 
 impl Ctx {
@@ -122,128 +120,116 @@ impl Ctx {
             .map_err(AppError::from)
     }
 
-    /// The sources a lecture can cite: verified, with text kizn holds, and
-    /// the excerpts that best match the concept.
-    fn held_sources(&self, concept_id: &str, statement: &str) -> Result<Vec<Held>, AppError> {
+    /// The sources a lecture can cite: verified, with text kizn holds.
+    fn held_sources(&self, concept_id: &str) -> Result<Vec<Held>, AppError> {
         let mut out = vec![];
         for s in self.store.sources(concept_id)? {
-            let Some(content) = s.content_json.as_deref().filter(|_| s.status == "verified") else {
+            let Some(content) = s.content_json.filter(|_| s.status == "verified") else {
                 continue;
             };
-            let chunks = if s.kind == "video" {
-                let cues: Vec<kizn_core::source::Cue> = serde_json::from_str(content).unwrap_or_default();
-                kizn_core::source::cue_chunks(&cues, 60.0)
-            } else {
-                let blocks: Vec<kizn_core::source::Block> = serde_json::from_str(content).unwrap_or_default();
-                kizn_core::source::page_chunks(&blocks, 120)
-            };
-            let excerpts: Vec<String> =
-                kizn_core::source::relevant(&chunks, statement, 4).into_iter().map(|c| c.text).collect();
-            if excerpts.is_empty() {
-                continue;
-            }
-            out.push(Held { short: format!("s{}", out.len() + 1), source_id: s.id, title: s.title, excerpts });
+            out.push(Held { short: format!("s{}", out.len() + 1), source_id: s.id, kind: s.kind, content });
         }
         Ok(out)
     }
 
+    /// Teaches first, backs second: the author writes the lecture from what
+    /// it knows, for the learner's goal; then each part is matched with
+    /// passages from the sources kizn read, and the checker says which back
+    /// it. What nothing backs gets one rewrite toward what the sources say,
+    /// then is left out.
     async fn write_lecture(&self, concept_id: &str) -> Result<(), AppError> {
         let gone = || AppError::Refused("that concept is gone".into());
         let concept = self.store.concept(concept_id)?.ok_or_else(gone)?;
         let outcome = self.store.outcome(&concept.outcome_id)?.ok_or_else(gone)?;
         let topic = self.store.topic(&outcome.topic_id)?.ok_or_else(gone)?;
-        let held = self.held_sources(concept_id, &concept.statement)?;
+        let held = self.held_sources(concept_id)?;
         if held.len() < MIN_SOURCES {
             let why = format!(
-                "kizn has {} source it could read and check for this; a lecture needs at least {MIN_SOURCES}",
+                "kizn has {} source it could read and trust for this; a lecture needs at least {MIN_SOURCES}",
                 held.len()
             );
             return self.save_lecture(concept_id, "unbacked", None, Some(&why));
         }
-        // What the bank's questions on it say people get wrong (to take on),
-        // and their wording (not to give away).
+        // The bank's wording (not to give away), and the mistakes this
+        // learner made on it: the misconceptions behind the options they
+        // picked when wrong.
         let items: Vec<_> = self
             .store
             .items(&outcome.id, None)?
             .into_iter()
             .filter(|i| i.concept_ids.first().map(String::as_str) == Some(concept_id))
             .collect();
-        let mut misconceptions: Vec<String> = vec![];
+        let attempts = self.store.attempts(Some(&topic.id))?;
         let mut answers: Vec<String> = vec![];
+        let mut learner_mixups: Vec<String> = vec![];
         for i in &items {
             answers.push(i.stem.clone());
-            let options = i.options_json.as_deref().unwrap_or("[]");
-            for o in serde_json::from_str::<Vec<ItemOption>>(options).unwrap_or_default() {
-                if o.correct {
-                    answers.push(o.text);
-                } else if let Some(m) = o.misconception.filter(|m| !misconceptions.contains(m)) {
-                    misconceptions.push(m);
+            let options: Vec<ItemOption> =
+                serde_json::from_str(i.options_json.as_deref().unwrap_or("[]")).unwrap_or_default();
+            answers.extend(options.iter().filter(|o| o.correct).map(|o| o.text.clone()));
+            for a in attempts.iter().filter(|a| a.item_id == i.id && !a.correct && a.disputed_at.is_none()) {
+                if let Some(m) = options.get(a.chosen).and_then(|o| o.misconception.clone())
+                    && !learner_mixups.contains(&m)
+                {
+                    learner_mixups.push(m);
                 }
             }
         }
-        misconceptions.truncate(6);
+        learner_mixups.truncate(3);
         let others: Vec<String> =
             self.store.concepts(&outcome.id)?.into_iter().filter(|c| c.id != concept_id).map(|c| c.statement).collect();
-        let shorts: Vec<String> = held.iter().map(|h| h.short.clone()).collect();
         let ask = json!({
-            "topic": topic.title, "goal": topic.goal, "outcome": outcome.statement, "concept": concept.statement,
-            "other_concepts": others, "supports": self.supports(&topic.id)?, "misconceptions": misconceptions,
-            "sources": held.iter().map(|h| json!({"id": h.short, "title": h.title, "excerpts": h.excerpts})).collect::<Vec<_>>(),
+            "topic": topic.title, "goal": topic.goal, "outcome": outcome.statement, "tier": outcome.target_tier,
+            "concept": concept.statement, "other_concepts": others, "supports": self.supports(&topic.id)?,
+            "learner_mixups": learner_mixups,
         });
 
         let author = self.role_model(Role::Author)?;
+        let writer = author.client.clone().with_max_tokens(8000);
         let checker = self.role_model(Role::Checker)?;
-        let write = |feedback: Option<String>| {
+        let write = |feedback: Option<Value>| {
             let mut input = ask.clone();
             if let Some(f) = feedback {
-                input["feedback"] = json!(f);
+                input["feedback"] = f;
             }
-            let author = &author;
+            let (writer, mode) = (&writer, author.mode);
             async move {
-                let (reply, _) = author
-                    .client
-                    .complete_json(
-                        WRITE_LECTURE,
-                        &format!("<input>\n{input}\n</input>"),
-                        &lecture_schema(),
-                        author.mode,
-                    )
+                let (reply, _) = writer
+                    .complete_json(WRITE_LECTURE, &format!("<input>\n{input}\n</input>"), &lecture_schema(), mode)
                     .await
                     .map_err(|e| AppError::Refused(format!("the author model couldn't write the lecture: {e}")))?;
                 Ok::<Lecture, AppError>(serde_json::from_value(reply).unwrap_or_default())
             }
         };
 
-        // Written, and checked in code; one more try, told why, if it fails.
-        let mut lecture = write(None).await?;
-        if let Err(why) = check_lecture(&lecture, &shorts, &answers, &concept.statement) {
-            lecture =
-                write(Some(format!("Your last lecture was refused: {why}. Write it again, fixing that."))).await?;
-            if let Err(why) = check_lecture(&lecture, &shorts, &answers, &concept.statement) {
-                return self.save_lecture(concept_id, "failed", None, Some(&format!("the lecture was refused: {why}")));
-            }
-        }
-
-        // Verified against what each part cites; one rewrite of what isn't
-        // supported, then whatever still isn't is left out.
-        let excerpts: HashMap<&str, &Vec<String>> = held.iter().map(|h| (h.short.as_str(), &h.excerpts)).collect();
-        let mut unsupported = self.verify(&checker, &concept.statement, &lecture, &excerpts).await?;
-        if !unsupported.is_empty() {
-            let list: Vec<String> = unsupported.iter().map(|(id, why)| format!("{id}: {why}")).collect();
-            let feedback = format!(
-                "These parts aren't supported by the excerpts they cite: {}. Rewrite the lecture so every part is \
-                 supported by what it cites (fix, re-cite or remove those parts). Your last lecture: {}",
-                list.join("; "),
-                serde_json::to_string(&lecture).unwrap_or_default()
-            );
+        let shorts: Vec<String> = held.iter().map(|h| h.short.clone()).collect();
+        let lecture = write(None).await?;
+        let (mut backed, mut unbacked) = self.back(&checker, &concept.statement, &lecture, &held).await?;
+        if !unbacked.is_empty() {
+            // One rewrite: what couldn't be backed, with what the sources do say.
+            let gaps: Vec<Value> = lecture
+                .claims()
+                .into_iter()
+                .filter(|c| unbacked.contains_key(&c.id))
+                .map(|c| {
+                    json!({"part": c.id, "text": c.text, "why": unbacked[&c.id],
+                           "passages": candidates(&held, &c.text).into_iter().map(|(_, t)| t).collect::<Vec<_>>()})
+                })
+                .collect();
+            let feedback = json!({
+                "note": "These parts couldn't be backed by the sources kizn read. Rewrite the lecture so they say \
+                         what these passages support, or leave them out; keep the rest.",
+                "unbacked": gaps,
+                "last_lecture": lecture,
+            });
             let rewritten = write(Some(feedback)).await?;
-            if check_lecture(&rewritten, &shorts, &answers, &concept.statement).is_ok() {
-                lecture = rewritten;
-                unsupported = self.verify(&checker, &concept.statement, &lecture, &excerpts).await?;
+            let (b, u) = self.back(&checker, &concept.statement, &rewritten, &held).await?;
+            if u.len() <= unbacked.len() {
+                (backed, unbacked) = (b, u);
             }
         }
-        let gaps: HashSet<String> = unsupported.into_keys().collect();
-        let kept = lecture.without(&gaps);
+        let gaps: HashSet<String> = unbacked.into_keys().collect();
+        let kept = backed.without(&gaps);
         if let Err(why) = check_lecture(&kept, &shorts, &answers, &concept.statement) {
             let why = format!("what its sources back is too little to read from yet ({why})");
             return self.save_lecture(concept_id, "unbacked", None, Some(&why));
@@ -253,50 +239,62 @@ impl Ctx {
         self.save_lecture(concept_id, "ready", Some(&stored), None)
     }
 
-    /// The parts the checker finds unsupported by what they cite, and why.
-    /// A part it says nothing about counts as unsupported.
-    async fn verify(
+    /// Each part of a lecture matched with candidate passages and judged by
+    /// the checker: the lecture with every backed part citing its sources,
+    /// and the parts nothing backs, with why. A part the checker says nothing
+    /// about isn't backed.
+    async fn back(
         &self,
         checker: &crate::topics::RoleModel,
         concept: &str,
         lecture: &Lecture,
-        excerpts: &HashMap<&str, &Vec<String>>,
-    ) -> Result<HashMap<String, String>, AppError> {
+        held: &[Held],
+    ) -> Result<(Lecture, HashMap<String, String>), AppError> {
         let claims = lecture.claims();
+        let offered: HashMap<String, Vec<(String, String)>> =
+            claims.iter().map(|c| (c.id.clone(), candidates(held, &c.text))).collect();
         let ask = json!({
             "concept": concept,
             "claims": claims.iter().map(|c| json!({
                 "id": c.id,
                 "text": c.text,
-                "excerpts": c.cites.iter().filter_map(|s| excerpts.get(s.as_str())).flat_map(|e| e.iter()).collect::<Vec<_>>(),
+                "candidates": offered[&c.id].iter().map(|(s, t)| json!({"source": s, "text": t})).collect::<Vec<_>>(),
             })).collect::<Vec<_>>(),
         });
         let (reply, _) = checker
             .client
-            .complete_json(VERIFY_LECTURE, &format!("<input>\n{ask}\n</input>"), &verdicts_schema(), checker.mode)
+            .clone()
+            .with_max_tokens(8000)
+            .complete_json(BACK_CLAIMS, &format!("<input>\n{ask}\n</input>"), &verdicts_schema(), checker.mode)
             .await
-            .map_err(|e| AppError::Refused(format!("the checker couldn't verify the lecture: {e}")))?;
-        let verdicts: HashMap<String, (bool, String)> = reply["verdicts"]
-            .as_array()
-            .map(|a| {
-                a.iter()
-                    .filter_map(|v| {
-                        Some((
-                            v["id"].as_str()?.to_string(),
-                            (v["supported"].as_bool().unwrap_or(false), v["why"].as_str().unwrap_or("").to_string()),
-                        ))
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-        Ok(claims
-            .into_iter()
-            .filter_map(|c| match verdicts.get(&c.id) {
-                Some((true, _)) => None,
-                Some((false, why)) => Some((c.id, why.clone())),
-                None => Some((c.id, "the checker didn't say".into())),
-            })
-            .collect())
+            .map_err(|e| AppError::Refused(format!("the checker couldn't back the lecture: {e}")))?;
+        let mut cites: HashMap<String, Vec<String>> = HashMap::new();
+        let mut why: HashMap<String, String> = HashMap::new();
+        for v in reply["verdicts"].as_array().into_iter().flatten() {
+            let Some(id) = v["id"].as_str() else { continue };
+            let Some(candidate_sources) = offered.get(id) else { continue };
+            // Only sources whose passages it was shown count.
+            let mut sources: Vec<String> = v["sources"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|s| s.as_str())
+                .filter(|s| candidate_sources.iter().any(|(c, _)| c == s))
+                .map(str::to_string)
+                .collect();
+            sources.dedup();
+            if v["supported"].as_bool() == Some(true) && !sources.is_empty() {
+                cites.insert(id.to_string(), sources);
+            } else {
+                why.insert(id.to_string(), v["why"].as_str().unwrap_or("not backed").to_string());
+            }
+        }
+        for c in &claims {
+            if !cites.contains_key(&c.id) && !why.contains_key(&c.id) {
+                why.insert(c.id.clone(), "the checker didn't say".into());
+            }
+        }
+        Ok((lecture.with_cites(&cites), why))
     }
 
     /// A concept's lecture for the page: its state, and the lecture with
@@ -322,6 +320,7 @@ impl Ctx {
             cites.iter().filter_map(|c| order.iter().position(|o| o == c)).map(|i| i as u32 + 1).collect()
         };
         let view = LectureView {
+            title: body.title.clone(),
             key_terms: body
                 .key_terms
                 .iter()

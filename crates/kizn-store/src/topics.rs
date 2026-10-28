@@ -548,6 +548,17 @@ impl Store {
             .optional()?)
     }
 
+    /// A concept's lecture gone, with the sources kizn found for it (the
+    /// learner's own stay), so both can be found and written afresh.
+    pub fn forget_lecture(&self, concept_id: &str) -> Result<()> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction()?;
+        tx.execute("DELETE FROM lectures WHERE concept_id = ?1", [concept_id])?;
+        tx.execute("DELETE FROM sources WHERE concept_id = ?1 AND added_by = 'kizn'", [concept_id])?;
+        tx.commit()?;
+        Ok(())
+    }
+
     pub fn save_lecture(&self, l: &LectureRow) -> Result<()> {
         self.conn.lock().unwrap().execute(
             "INSERT INTO lectures (concept_id, status, body_json, reason, written_at) VALUES (?1, ?2, ?3, ?4, ?5)

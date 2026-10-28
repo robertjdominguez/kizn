@@ -11,6 +11,9 @@ use serde::{Deserialize, Serialize};
 /// What a lecture is written as, and stored as (cites are source ids).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Lecture {
+    /// A short title for the reading (the concept's statement can be long).
+    #[serde(default)]
+    pub title: String,
     #[serde(default)]
     pub key_terms: Vec<Term>,
     #[serde(default)]
@@ -112,6 +115,7 @@ impl Lecture {
             .collect();
         let keep = |prefix: &str, i: usize| !unsupported.contains(&format!("{prefix}{i}"));
         Lecture {
+            title: self.title.clone(),
             key_terms: self
                 .key_terms
                 .iter()
@@ -126,6 +130,45 @@ impl Lecture {
                 .enumerate()
                 .filter(|(i, _)| keep("m", *i))
                 .map(|(_, m)| m.clone())
+                .collect(),
+        }
+    }
+
+    /// The same lecture with each claim citing what backs it (`cites`, by
+    /// claim id); a claim not listed cites nothing.
+    pub fn with_cites(&self, cites: &std::collections::HashMap<String, Vec<String>>) -> Lecture {
+        let c = |id: String| cites.get(&id).cloned().unwrap_or_default();
+        Lecture {
+            title: self.title.clone(),
+            key_terms: self
+                .key_terms
+                .iter()
+                .enumerate()
+                .map(|(i, t)| Term { term: t.term.clone(), meaning: t.meaning.clone(), cites: c(format!("t{i}")) })
+                .collect(),
+            sections: self
+                .sections
+                .iter()
+                .enumerate()
+                .map(|(si, sec)| Section {
+                    heading: sec.heading.clone(),
+                    paragraphs: sec
+                        .paragraphs
+                        .iter()
+                        .enumerate()
+                        .map(|(pi, p)| Paragraph { text: p.text.clone(), cites: c(format!("p{si}.{pi}")) })
+                        .collect(),
+                })
+                .collect(),
+            misconceptions: self
+                .misconceptions
+                .iter()
+                .enumerate()
+                .map(|(i, m)| MixUp {
+                    belief: m.belief.clone(),
+                    correction: m.correction.clone(),
+                    cites: c(format!("m{i}")),
+                })
                 .collect(),
         }
     }
@@ -149,6 +192,7 @@ impl Lecture {
     pub fn map_cites(&self, map: impl Fn(&str) -> Option<String>) -> Lecture {
         let m = |cites: &[String]| cites.iter().filter_map(|c| map(c)).collect::<Vec<_>>();
         Lecture {
+            title: self.title.clone(),
             key_terms: self
                 .key_terms
                 .iter()
@@ -197,6 +241,9 @@ pub fn check_lecture(l: &Lecture, held: &[String], answers: &[String], concept: 
         if c.cites.is_empty() {
             return Err(format!("{} cites nothing", c.id));
         }
+        if let Some(tag) = source_tag(&c.text) {
+            return Err(format!("{} names a source in its text ({tag}): footnotes do that", c.id));
+        }
         if let Some(bad) = c.cites.iter().find(|id| !held.contains(id)) {
             return Err(format!("{} cites {bad:?}, which isn't one of the sources", c.id));
         }
@@ -209,6 +256,25 @@ pub fn check_lecture(l: &Lecture, held: &[String], answers: &[String], concept: 
         return Err(format!("draws on {cited} source, at least {MIN_SOURCES}"));
     }
     Ok(())
+}
+
+/// A source id written into the prose ("(s2)", "[s1]"), if there is one.
+fn source_tag(text: &str) -> Option<String> {
+    let chars: Vec<char> = text.chars().collect();
+    for (i, &open) in chars.iter().enumerate() {
+        let close = match open {
+            '(' => ')',
+            '[' => ']',
+            _ => continue,
+        };
+        if chars.get(i + 1).is_some_and(|c| *c == 's' || *c == 'S') {
+            let digits: String = chars[i + 2..].iter().take_while(|c| c.is_ascii_digit()).collect();
+            if !digits.is_empty() && chars.get(i + 2 + digits.len()) == Some(&close) {
+                return Some(format!("{open}s{digits}{close}"));
+            }
+        }
+    }
+    None
 }
 
 fn words(s: &str) -> Vec<String> {
@@ -257,6 +323,7 @@ mod tests {
 
     fn lecture() -> Lecture {
         Lecture {
+            title: "Images, layer by layer".into(),
             key_terms: vec![Term {
                 term: "Layer".into(),
                 meaning: "a read-only filesystem diff".into(),
@@ -324,6 +391,16 @@ mod tests {
         assert_eq!(check_lecture(&l, &held(), &named, "an image as a stack of read-only layers"), Ok(()));
         // A few shared words are fine.
         assert_eq!(check_lecture(&lecture(), &held(), &answers, ""), Ok(()));
+    }
+
+    #[test]
+    fn sources_are_footnotes_not_prose() {
+        let mut l = lecture();
+        l.sections[0].paragraphs[0].text = "GCC sets the width (s2).".into();
+        assert!(check_lecture(&l, &held(), &[], "").unwrap_err().contains("names a source in its text"));
+        // An S3 bucket is just a word.
+        l.sections[0].paragraphs[0].text = "Logs land in an S3 bucket (S3 is object storage).".into();
+        assert_eq!(check_lecture(&l, &held(), &[], ""), Ok(()));
     }
 
     #[test]

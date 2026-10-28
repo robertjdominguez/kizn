@@ -63,6 +63,11 @@ pub enum Command {
     StopDrafting {
         topic_id: String,
     },
+    /// Writes a concept's lecture again from scratch: kizn looks for sources
+    /// afresh (keeping the learner's own) and teaches it again.
+    RewriteLecture {
+        concept_id: String,
+    },
     /// Deletes a topic (or discards a draft) with everything in it: its
     /// questions, practice, reading and notes. Topics linked to it stay.
     DeleteTopic {
@@ -300,6 +305,8 @@ pub struct ConceptPageView {
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct LectureView {
+    /// A short title for the reading.
+    pub title: String,
     pub key_terms: Vec<TermView>,
     pub sections: Vec<SectionView>,
     pub misconceptions: Vec<MixUpView>,

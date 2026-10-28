@@ -8,4 +8,8 @@ import type { TermView } from "./TermView";
  * A concept explained in depth; every part's footnotes are sources kizn
  * read, and the checker found they support it.
  */
-export type LectureView = { key_terms: Array<TermView>, sections: Array<SectionView>, misconceptions: Array<MixUpView>, footnotes: Array<FootnoteView>, };
+export type LectureView = { 
+/**
+ * A short title for the reading.
+ */
+title: string, key_terms: Array<TermView>, sections: Array<SectionView>, misconceptions: Array<MixUpView>, footnotes: Array<FootnoteView>, };

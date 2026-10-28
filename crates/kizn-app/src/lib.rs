@@ -197,6 +197,7 @@ impl App {
             Command::StartTopic { title, goal, foundation } => {
                 self.start_topic(&title, &goal, foundation.as_deref()).map(Reply::Topic)
             }
+            Command::RewriteLecture { concept_id } => self.rewrite_lecture(&concept_id).map(Reply::Concept),
             Command::DeleteTopic { topic_id } => self.delete_topic(&topic_id).map(|()| Reply::Done),
             Command::FoundationPrefill { suggestion_id } => self.foundation_prefill(&suggestion_id).map(Reply::Prefill),
             Command::StopDrafting { topic_id } => self.stop_drafting(&topic_id).map(Reply::Topic),
