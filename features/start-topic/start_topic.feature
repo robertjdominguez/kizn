@@ -51,6 +51,12 @@ Feature: Start a topic
     Then kizn tries writing it again straight away
 
   @domain
+  Scenario: A new topic's first questions come before an older topic's deeper ones
+    Given a topic whose bank is still being written
+    When I start and confirm another topic
+    Then its first questions are written before more of the older topic's
+
+  @domain
   Scenario: Questions that keep failing the checks rest, then come back by themselves
     Given a confirmed topic whose checker refuses every question
     When the bank is written

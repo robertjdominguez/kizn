@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use kizn_core::bank::{
     BankedItem, CheckContext, Concept, ItemKind, LETTERS, OutcomeBank, Slot, TopicRef, bank_needs, blind_verdict,
-    check_item, next_need, parse_blind, shuffled_order,
+    check_item, next_across, parse_blind, shuffled_order,
 };
 use kizn_core::{Tier, sql_time};
 use kizn_model::ModelError;
@@ -93,14 +93,17 @@ impl Ctx {
     }
 
     /// Settles every confirmed topic's outcome states (ready when nothing's
-    /// needed, waiting when something is; failed ones wait for their retry),
-    /// then returns the first batch to write: the oldest topic that needs
-    /// one, in the order its learner will need it (kizn_core::bank::next_need).
-    /// Worked out from what's stored, so a restart carries straight on.
+    /// needed, waiting when something is; failed and resting ones wait for
+    /// their retry), then returns the batch the learner will need soonest,
+    /// across every topic (kizn_core::bank::next_across): a new topic's first
+    /// set comes before an older topic's deepest questions. Worked out from
+    /// what's stored, so a restart carries straight on.
     fn next_job(&self) -> Result<Option<Job>, AppError> {
         let now = self.now();
         let attempted: HashSet<String> =
             self.store.attempts(None)?.into_iter().filter(|a| a.disputed_at.is_none()).map(|a| a.item_id).collect();
+        // Each topic's outcomes, items and which outcomes can be written now.
+        let mut topics = vec![];
         for t in self.store.all_topics()?.into_iter().filter(|t| t.status == "confirmed") {
             let outcomes = self.store.outcomes(&t.id)?;
             let mut data = vec![];
@@ -111,39 +114,44 @@ impl Ctx {
             }
             let mut moved = false;
             let mut eligible = vec![];
-            for (o, concept_ids, items) in &data {
+            for (o, concept_ids, items) in data {
                 let paused = matches!(o.bank_state.as_str(), "failed" | "resting")
                     && o.retry_at.as_deref().is_some_and(|r| r > now.as_str());
                 if paused {
                     continue;
                 }
-                let banked = banked(items);
                 let target = Tier::parse(&o.target_tier).unwrap_or(Tier::Understand);
-                let state =
-                    if bank_needs(target, concept_ids, &banked, &attempted).is_empty() { "ready" } else { "waiting" };
+                let state = if bank_needs(target, &concept_ids, &banked(&items), &attempted).is_empty() {
+                    "ready"
+                } else {
+                    "waiting"
+                };
                 if o.bank_state != state {
                     self.store.set_bank_state(&o.id, state, None, None)?;
                     moved = true;
                 }
-                eligible.push((*o, concept_ids, items));
+                eligible.push((o.clone(), concept_ids, items));
             }
             if moved {
                 self.changed(&t.id);
             }
-            let banks: Vec<OutcomeBank> = eligible
-                .iter()
-                .map(|(o, concept_ids, items)| OutcomeBank {
-                    target: Tier::parse(&o.target_tier).unwrap_or(Tier::Understand),
-                    concept_ids,
-                    active: banked(items),
-                    attempted: &attempted,
-                })
-                .collect();
-            if let Some((i, slot, count)) = next_need(&banks) {
-                return Ok(Some(Job { outcome: eligible[i].0.clone(), slot, count }));
-            }
+            topics.push(eligible);
         }
-        Ok(None)
+        let banks: Vec<Vec<OutcomeBank>> = topics
+            .iter()
+            .map(|eligible| {
+                eligible
+                    .iter()
+                    .map(|(o, concept_ids, items)| OutcomeBank {
+                        target: Tier::parse(&o.target_tier).unwrap_or(Tier::Understand),
+                        concept_ids,
+                        active: banked(items),
+                        attempted: &attempted,
+                    })
+                    .collect()
+            })
+            .collect();
+        Ok(next_across(&banks).map(|(t, i, slot, count)| Job { outcome: topics[t][i].0.clone(), slot, count }))
     }
 
     /// Waits (up to a few minutes) while the tutor is answering on any of
