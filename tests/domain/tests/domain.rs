@@ -2208,14 +2208,6 @@ async fn still_there(w: &mut Kizn, a: String, b: String) {
 
 const OLDER_TOPIC: &str = "01SEEDTOPIC00000000000000T";
 
-impl Kizn {
-    /// Batches written so far for a topic's outcomes.
-    fn batches_for(&self, topic_id: &str) -> i64 {
-        let store = self.store();
-        store.outcomes(topic_id).unwrap().iter().map(|o| store.batch_count(&o.id).unwrap_or(0)).sum()
-    }
-}
-
 #[given("a topic whose bank is still being written")]
 async fn older_topic_writing(w: &mut Kizn) {
     w.seed("topic-with-bank").await;
