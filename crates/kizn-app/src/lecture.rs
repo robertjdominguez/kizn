@@ -216,10 +216,10 @@ impl Ctx {
 
         // Written, and checked in code; one more try, told why, if it fails.
         let mut lecture = write(None).await?;
-        if let Err(why) = check_lecture(&lecture, &shorts, &answers) {
+        if let Err(why) = check_lecture(&lecture, &shorts, &answers, &concept.statement) {
             lecture =
                 write(Some(format!("Your last lecture was refused: {why}. Write it again, fixing that."))).await?;
-            if let Err(why) = check_lecture(&lecture, &shorts, &answers) {
+            if let Err(why) = check_lecture(&lecture, &shorts, &answers, &concept.statement) {
                 return self.save_lecture(concept_id, "failed", None, Some(&format!("the lecture was refused: {why}")));
             }
         }
@@ -237,14 +237,14 @@ impl Ctx {
                 serde_json::to_string(&lecture).unwrap_or_default()
             );
             let rewritten = write(Some(feedback)).await?;
-            if check_lecture(&rewritten, &shorts, &answers).is_ok() {
+            if check_lecture(&rewritten, &shorts, &answers, &concept.statement).is_ok() {
                 lecture = rewritten;
                 unsupported = self.verify(&checker, &concept.statement, &lecture, &excerpts).await?;
             }
         }
         let gaps: HashSet<String> = unsupported.into_keys().collect();
         let kept = lecture.without(&gaps);
-        if let Err(why) = check_lecture(&kept, &shorts, &answers) {
+        if let Err(why) = check_lecture(&kept, &shorts, &answers, &concept.statement) {
             let why = format!("what its sources back is too little to read from yet ({why})");
             return self.save_lecture(concept_id, "unbacked", None, Some(&why));
         }
