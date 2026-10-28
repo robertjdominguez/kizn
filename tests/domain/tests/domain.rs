@@ -2203,3 +2203,48 @@ async fn still_there(w: &mut Kizn, a: String, b: String) {
         assert!(today.contains(t) && map.contains(t), "{t} should still be there: {today:?} / {map:?}");
     }
 }
+
+// --- Writing across topics ----------------------------------------------------------
+
+const OLDER_TOPIC: &str = "01SEEDTOPIC00000000000000T";
+
+#[given("a topic whose bank is still being written")]
+async fn older_topic_writing(w: &mut Kizn) {
+    w.seed("topic-with-bank").await;
+}
+
+#[when("I start and confirm another topic")]
+async fn start_and_confirm_another(w: &mut Kizn) {
+    // Started later than the seeded topic, as a new topic would be.
+    w.clock.advance(chrono::Duration::days(1));
+    start_topic(w, "SPCS".into(), "run my services on Snowpark Container Services".into()).await;
+    let topic_id = w.topic_id();
+    // Batches so far, so the step after looks only at those started since.
+    w.closed_port = Some(w.store().batch_order().unwrap().len() as u16);
+    w.topic_from(Command::ConfirmTopic { topic_id }).await;
+}
+
+#[then("its first questions are written before more of the older topic's")]
+async fn new_topic_first(w: &mut Kizn) {
+    let t = w.wait_for("the new topic's first set", |t| t.can_practise).await;
+    let older: std::collections::HashSet<String> =
+        w.store().outcomes(OLDER_TOPIC).unwrap().into_iter().map(|o| o.id).collect();
+    let first_outcome = t.outcomes[0].id.clone();
+    let first_set = t.outcomes[0].concepts.len();
+    // In the order batches started since the confirm: count the older
+    // topic's until the new topic's first outcome has had one per concept.
+    let since = w.store().batch_order().unwrap().split_off(usize::from(w.closed_port.unwrap()));
+    let (mut older_first, mut new_done) = (0, 0);
+    for outcome in since {
+        if outcome == first_outcome {
+            new_done += 1;
+            if new_done == first_set {
+                break;
+            }
+        } else if older.contains(&outcome) {
+            older_first += 1;
+        }
+    }
+    // At most the batch already under way when the new topic was confirmed.
+    assert!(older_first <= 1, "the older topic got {older_first} batches before the new one's first set");
+}

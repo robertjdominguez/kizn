@@ -782,6 +782,13 @@ impl Store {
         Ok(())
     }
 
+    /// Every batch's outcome, in the order the batches started.
+    pub fn batch_order(&self) -> Result<Vec<String>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT outcome_id FROM item_batches ORDER BY rowid")?;
+        Ok(stmt.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?)
+    }
+
     pub fn batch_count(&self, outcome_id: &str) -> Result<i64> {
         let conn = self.conn.lock().unwrap();
         Ok(conn.query_row("SELECT count(*) FROM item_batches WHERE outcome_id = ?1", [outcome_id], |r| r.get(0))?)

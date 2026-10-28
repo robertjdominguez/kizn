@@ -137,6 +137,13 @@ pub struct OutcomeBank<'a> {
 /// recall, then every recall slot to full, then "use it", target and explain
 /// questions. Returns the outcome's index, the slot and how many to write.
 pub fn next_need(outcomes: &[OutcomeBank]) -> Option<(usize, Slot, usize)> {
+    ranked_need(outcomes).map(|(_, i, slot, n)| (i, slot, n))
+}
+
+/// Like `next_need`, with how soon the learner needs it: 0 is outcome 1's
+/// first set, 1 its second recall, 2 and 3 the other outcomes' first set and
+/// second recall, 4 to 7 the rest by kind (recall, use it, target, explain).
+pub fn ranked_need(outcomes: &[OutcomeBank]) -> Option<(u8, usize, Slot, usize)> {
     let in_slot = |o: &OutcomeBank, concept: &String| {
         o.active.iter().filter(|i| i.kind == ItemKind::Recall && i.concept_ids.first() == Some(concept)).count()
     };
@@ -148,28 +155,42 @@ pub fn next_need(outcomes: &[OutcomeBank]) -> Option<(usize, Slot, usize)> {
         (&order[order.len().min(1)..], 1),
         (&order[order.len().min(1)..], 2),
     ];
-    for (which, level) in passes {
+    for (rank, (which, level)) in passes.into_iter().enumerate() {
         for &i in which {
             let o = &outcomes[i];
             for c in o.concept_ids {
                 let have = in_slot(o, c);
                 if have < level {
-                    return Some((i, Slot { kind: ItemKind::Recall, concept_id: Some(c.clone()) }, level - have));
+                    let slot = Slot { kind: ItemKind::Recall, concept_id: Some(c.clone()) };
+                    return Some((rank as u8, i, slot, level - have));
                 }
             }
         }
     }
     // Then by kind, outcome by outcome: the rest of recall, use it, target, explain.
-    for kind in [ItemKind::Recall, ItemKind::Apply, ItemKind::Target, ItemKind::Explain] {
+    for (k, kind) in [ItemKind::Recall, ItemKind::Apply, ItemKind::Target, ItemKind::Explain].into_iter().enumerate() {
         for (i, o) in outcomes.iter().enumerate() {
             if let Some((slot, n)) =
                 bank_needs(o.target, o.concept_ids, &o.active, o.attempted).into_iter().find(|(s, _)| s.kind == kind)
             {
-                return Some((i, slot, n));
+                return Some((4 + k as u8, i, slot, n));
             }
         }
     }
     None
+}
+
+/// What to write next across topics (oldest first): the need that comes
+/// soonest for the learner, whichever topic it's in, so a new topic gets its
+/// first set before an older one's bank is filled to the deepest kinds. The
+/// oldest topic wins a tie. Returns the topic's index with `next_need`'s.
+pub fn next_across(topics: &[Vec<OutcomeBank>]) -> Option<(usize, usize, Slot, usize)> {
+    topics
+        .iter()
+        .enumerate()
+        .filter_map(|(t, outcomes)| ranked_need(outcomes).map(|(rank, i, slot, n)| (rank, t, i, slot, n)))
+        .min_by_key(|(rank, t, ..)| (*rank, *t))
+        .map(|(_, t, i, slot, n)| (t, i, slot, n))
 }
 
 /// Whether an outcome's first set can be offered: one recall question on
@@ -744,6 +765,31 @@ mod tests {
         four.push(BankedItem { id: "i3", kind: ItemKind::Recall, concept_ids: &concept });
         let needs = bank_needs(Tier::Understand, &concepts, &four, &attempted);
         assert!(needs.iter().all(|(s, _)| s.kind != ItemKind::Recall), "two unseen of four: no refill yet");
+    }
+
+    #[test]
+    fn a_new_topic_gets_its_first_set_before_an_older_one_fills_up() {
+        let none: &'static HashSet<String> = Box::leak(Box::new(HashSet::new()));
+        let old: &'static [String] = Box::leak(vec!["o1".to_string()].into_boxed_slice());
+        let new: &'static [String] = Box::leak(vec!["n1".to_string()].into_boxed_slice());
+        let rec = |c: &'static [String], i: usize| BankedItem {
+            id: Box::leak(format!("{}-{i}", c[0]).into_boxed_str()),
+            kind: ItemKind::Recall,
+            concept_ids: &c[..1],
+        };
+        let bank = |concepts: &'static [String], active: Vec<BankedItem<'static>>| {
+            vec![OutcomeBank { target: Tier::Evaluate, concept_ids: concepts, active, attempted: none }]
+        };
+        // The older topic has its first set and second recall; the new one
+        // has nothing: the new one's first set comes first.
+        let older = bank(old, vec![rec(old, 0), rec(old, 1)]);
+        let (t, _, slot, _) = next_across(&[older, bank(new, vec![])]).unwrap();
+        assert_eq!((t, slot.concept_id.as_deref()), (1, Some("n1")));
+        // Both need the same thing: the older topic first.
+        let (t, ..) = next_across(&[bank(old, vec![]), bank(new, vec![])]).unwrap();
+        assert_eq!(t, 0);
+        // Nothing needed anywhere: nothing to write.
+        assert!(next_across(&[vec![], vec![]]).is_none());
     }
 
     #[test]
