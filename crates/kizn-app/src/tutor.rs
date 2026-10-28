@@ -114,10 +114,17 @@ impl Ctx {
                     .filter(|s| s.status == "verified")
                     .map(|s| json!({ "title": s.title, "kind": s.kind, "url": s.url, "excerpts": self.excerpts(&s, &q, 2) }))
                     .collect();
+                // And the lecture the learner reads, when there is one.
+                let lecture: Option<Value> = self
+                    .store
+                    .lecture(concept_id)?
+                    .filter(|l| l.status == "ready")
+                    .and_then(|l| l.body_json)
+                    .and_then(|b| serde_json::from_str(&b).ok());
                 Ok((
                     o.topic_id.clone(),
                     json!({ "kind": "concept", "title": c.statement, "concept": c.statement, "outcome": o.statement,
-                            "resources": sources, "note": self.store.note(concept_id)? }),
+                            "resources": sources, "lecture": lecture, "note": self.store.note(concept_id)? }),
                 ))
             }
             Anchor::Resource { source_id } => {

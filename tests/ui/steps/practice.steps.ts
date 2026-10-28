@@ -485,7 +485,87 @@ Then("I can reopen either", async ({ page }) => {
 // ---- read in kizn --------------------------------------------------------------------
 
 const sheet = (page: Page) => page.getByRole("dialog").filter({ hasText: "Learn this" });
-const reader = (page: Page) => page.getByRole("dialog", { name: "Reader" });
+const lecture = (page: Page) => page.getByRole("dialog", { name: "Lecture" });
+
+/** Opens the concept's lecture from its sheet, once it's written. */
+async function openLecture(page: Page) {
+  if (
+    await lecture(page)
+      .isVisible()
+      .catch(() => false)
+  )
+    return;
+  await sheet(page)
+    .getByRole("button", { name: /Read the lecture/ })
+    .click({ timeout: 30_000 });
+  await expect(lecture(page)).toBeVisible();
+}
+
+/** Selects a paragraph of the lecture and asks about it. */
+async function askAboutPassage(page: Page, text: string) {
+  await openLecture(page);
+  const para = lecture(page).locator("article p", { hasText: "source" }).first();
+  await expect(para).toBeVisible();
+  // Select the paragraph (the reader follows the selection, however it's made).
+  await para.evaluate((p) => {
+    const range = document.createRange();
+    range.selectNodeContents(p);
+    const sel = window.getSelection();
+    sel?.removeAllRanges();
+    sel?.addRange(range);
+  });
+  await page.getByRole("button", { name: "Ask about the selection" }).click();
+  await expect(tutor(page).locator("blockquote")).toContainText("source");
+  await askInSheet(page, text, "About");
+}
+
+Given("a concept with a lecture", async ({ page, world }) => {
+  await seedTopic(page);
+  await openPractice(page, world, `/#/practice/${TOPIC}`);
+  await skipIntro(page);
+  await answer(page, world as PracticeWorld, false);
+  await openMissed(page, world as PracticeWorld);
+  await expect(sheet(page).getByRole("button", { name: /Read the lecture/ })).toBeVisible({ timeout: 30_000 });
+});
+
+When("I pick a passage in its lecture and ask {string}", async ({ page }, text: string) => {
+  await askAboutPassage(page, text);
+});
+
+When("I read its lecture, pick a passage and ask {string}", async ({ page }, text: string) => {
+  await askAboutPassage(page, text);
+});
+
+Then("the tutor's reply is about that passage", async ({ page }) => {
+  await expect(tutor(page).getByLabel("The tutor's reply").last()).toContainText('On "');
+});
+
+// ---- lectures -------------------------------------------------------------------------
+
+When("I open it and its lecture is written", async ({ page, world }) => {
+  await openMissed(page, world as PracticeWorld);
+  await expect(sheet(page).getByRole("button", { name: /Read the lecture/ })).toBeVisible({ timeout: 30_000 });
+});
+
+Then("every paragraph, key term and mix-up cites the sources kizn read", async ({ page }) => {
+  await openLecture(page);
+  await expect(lecture(page).getByRole("button", { name: "Source 1" }).first()).toBeVisible();
+  await expect(lecture(page).getByRole("button", { name: "Source 2" }).first()).toBeVisible();
+  // Two or more of the sources kizn read for it (pages or videos).
+  const sources = lecture(page).getByRole("region", { name: "Sources" }).getByRole("listitem");
+  expect(await sources.count()).toBeGreaterThanOrEqual(2);
+  await expect(sources.first()).toContainText("docs.example.org");
+});
+
+Then("it takes on the mix-ups my wrong answers showed", async ({ page }) => {
+  await expect(lecture(page).getByRole("region", { name: "Where people go wrong" })).toBeVisible();
+});
+
+Then("none of it repeats a question's wording", async ({ page, world }) => {
+  const stem = (world as PracticeWorld).deck?.cards[0]?.stem ?? "";
+  expect(stem).not.toBe("");
+  await expect(lecture(page)).not.toContainText(stem);
+});
 
 Given("a concept with a verified page", async ({ page, world }) => {
   await seedTopic(page);
@@ -494,24 +574,6 @@ Given("a concept with a verified page", async ({ page, world }) => {
   await answer(page, world as PracticeWorld, false);
   await openMissed(page, world as PracticeWorld);
   await expect(sheet(page).getByText("docs.example.org")).toBeVisible({ timeout: 15_000 });
-});
-
-When("I open it in kizn", async ({ page }) => {
-  await sheet(page)
-    .getByRole("button", { name: /docs\.example\.org/ })
-    .click();
-  await expect(reader(page)).toBeVisible();
-});
-
-Then("I read its text with the concept on top", async ({ page }) => {
-  await expect(reader(page)).toContainText("Reading for");
-  await expect(reader(page)).toContainText("An image is immutable layers plus config");
-  await expect(reader(page).getByRole("heading", { level: 2 }).first()).toBeVisible();
-});
-
-Then("not the page's scripts or navigation", async ({ page }) => {
-  await expect(reader(page)).not.toContainText("analytics()");
-  await expect(reader(page)).not.toContainText("Docs Guides Reference");
 });
 
 When("kizn looks for resources for it", async ({ page, world }) => {
@@ -524,25 +586,14 @@ Then("a video with captions is offered", async ({ page }) => {
   await expect(sheet(page).getByLabel("Video")).toBeVisible();
 });
 
-Then("opening it shows its transcript with timestamps", async ({ page }) => {
-  await sheet(page)
-    .getByRole("button", { name: /youtube\.com/ })
-    .click();
-  await expect(reader(page).getByRole("button", { name: "0:00", exact: true })).toBeVisible();
-  await expect(reader(page).getByRole("button", { name: "0:05", exact: true })).toBeVisible();
-  await expect(reader(page).getByRole("button", { name: "Watch on YouTube" })).toBeVisible();
-});
-
-When("I write a note while reading it", async ({ page }) => {
-  await sheet(page)
-    .getByRole("button", { name: /docs\.example\.org/ })
-    .click();
-  await reader(page).getByLabel("Your note").fill("Layers are shared, so rebuilds are cheap.");
-  await expect(reader(page).getByText("Saved")).toBeVisible();
+When("I write a note while reading its lecture", async ({ page }) => {
+  await openLecture(page);
+  await lecture(page).getByLabel("Your note").fill("Layers are shared, so rebuilds are cheap.");
+  await expect(lecture(page).getByText("Saved")).toBeVisible();
 });
 
 When("I come back to the concept later", async ({ page }) => {
-  await reader(page).getByRole("button", { name: "Back" }).click();
+  await lecture(page).getByRole("button", { name: "Back" }).click();
   await page.keyboard.press("Escape");
   await page.goto(`/#/topic/${TOPIC}`);
   await page.reload();
@@ -574,43 +625,13 @@ Then("the tutor's reply draws on the concept's resources", async ({ page }) => {
 Then("the concept shows {int} conversation", async ({ page }, n: number) => {
   await page.keyboard.press("Escape");
   await expect(tutor(page)).toHaveCount(0);
-  await expect(
-    sheet(page).getByRole("button", { name: new RegExp(`Ask about this concept · ${n} conversation`) }),
-  ).toBeVisible();
-});
-
-When("I pick a passage in the page and ask {string}", async ({ page }, text: string) => {
-  await sheet(page)
-    .getByRole("button", { name: /docs\.example\.org/ })
-    .click();
-  const article = reader(page).locator("article");
-  const para = article.locator("p", { hasText: "This page explains" }).first();
-  await expect(para).toBeVisible();
-  // Select the paragraph (the reader follows the selection, however it's made).
-  await para.evaluate((p) => {
-    const range = document.createRange();
-    range.selectNodeContents(p);
-    const sel = window.getSelection();
-    sel?.removeAllRanges();
-    sel?.addRange(range);
-  });
-  await page.getByRole("button", { name: "Ask about the selection" }).click();
-  await expect(tutor(page).locator("blockquote")).toContainText("This page explains");
-  await askInSheet(page, text, "About");
-});
-
-Then("the tutor's reply is about that passage, from the page", async ({ page }) => {
-  const reply = tutor(page).getByLabel("The tutor's reply").last();
-  await expect(reply).toContainText('On "This page explains');
-  await expect(reply).toContainText("From it:");
-});
-
-Then("the page shows {int} conversation", async ({ page }, n: number) => {
-  await page.keyboard.press("Escape");
-  await expect(tutor(page)).toHaveCount(0);
-  await expect(
-    reader(page).getByRole("button", { name: new RegExp(`Ask about this · ${n} conversation`) }),
-  ).toBeVisible();
+  // Asked from its lecture: the lecture says so; from its sheet, the sheet.
+  const where = (await lecture(page)
+    .isVisible()
+    .catch(() => false))
+    ? lecture(page).getByRole("button", { name: new RegExp(`Ask about this · ${n} conversation`) })
+    : sheet(page).getByRole("button", { name: new RegExp(`Ask about this concept · ${n} conversation`) });
+  await expect(where).toBeVisible();
 });
 
 // ---- when I'm stuck ------------------------------------------------------------------
@@ -633,8 +654,8 @@ When("I open what I missed", async ({ page }) => {
 When("I close the tutor and the reader, and mark it studied", async ({ page }) => {
   await page.keyboard.press("Escape");
   await expect(tutor(page)).toHaveCount(0);
-  await reader(page).getByRole("button", { name: "Back" }).click();
-  await expect(reader(page)).toHaveCount(0);
+  await lecture(page).getByRole("button", { name: "Back" }).click();
+  await expect(lecture(page)).toHaveCount(0);
   await sheet(page).getByRole("button", { name: "Mark studied" }).click();
   await expect(sheet(page).getByText("Studied")).toBeVisible();
   await page.keyboard.press("Escape");

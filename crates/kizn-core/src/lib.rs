@@ -8,6 +8,7 @@ pub mod clock;
 pub mod deck;
 pub mod graph;
 pub mod id;
+pub mod lecture;
 pub mod progress;
 pub mod rng;
 pub mod source;

@@ -80,6 +80,17 @@ pub struct AttemptRow {
     pub disputed_at: Option<String>,
 }
 
+/// A concept's lecture, and how far it's got.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LectureRow {
+    pub concept_id: String,
+    /// writing | ready | unbacked | failed
+    pub status: String,
+    pub body_json: Option<String>,
+    pub reason: Option<String>,
+    pub written_at: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LinkRow {
     pub id: String,
@@ -515,6 +526,34 @@ impl Store {
             .lock()
             .unwrap()
             .execute("UPDATE sources SET content_json = ?2 WHERE id = ?1", params![id, content_json])?;
+        Ok(())
+    }
+
+    pub fn lecture(&self, concept_id: &str) -> Result<Option<LectureRow>> {
+        let conn = self.conn.lock().unwrap();
+        Ok(conn
+            .query_row(
+                "SELECT concept_id, status, body_json, reason, written_at FROM lectures WHERE concept_id = ?1",
+                [concept_id],
+                |r| {
+                    Ok(LectureRow {
+                        concept_id: r.get(0)?,
+                        status: r.get(1)?,
+                        body_json: r.get(2)?,
+                        reason: r.get(3)?,
+                        written_at: r.get(4)?,
+                    })
+                },
+            )
+            .optional()?)
+    }
+
+    pub fn save_lecture(&self, l: &LectureRow) -> Result<()> {
+        self.conn.lock().unwrap().execute(
+            "INSERT INTO lectures (concept_id, status, body_json, reason, written_at) VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT (concept_id) DO UPDATE SET status = ?2, body_json = ?3, reason = ?4, written_at = ?5",
+            params![l.concept_id, l.status, l.body_json, l.reason, l.written_at],
+        )?;
         Ok(())
     }
 

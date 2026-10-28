@@ -10,6 +10,7 @@ mod events;
 mod flags;
 mod foundations;
 mod ground;
+mod lecture;
 mod map;
 mod paths;
 mod practice;
@@ -30,11 +31,11 @@ use tokio::sync::broadcast;
 pub use command::{
     Anchor, AnswerView, AppError, AppInfo, BlockView, CardView, CheckView, Command, ConceptChange, ConceptLine,
     ConceptPageView, ConceptProgress, ConceptView, CueView, DayView, DeckView, DisputeView, DraftInput, DraftOutcome,
-    Event, FlagView, GroundFoundation, GroundQuestion, GroundView, KeyView, LinkedTopic, MapEdge, MapNode, MapView,
-    MessageView, NextStep, NoteView, OptionFeedback, OutcomeProgress, OutcomeStanding, OutcomeView, PrefillView,
-    ProgressView, ProviderView, ReadingItem, ReadingListView, Reply, ResourceView, Role, RolesView, SettingsView,
-    SlotView, SourceView, StateCounts, SuggestionView, SummaryView, ThreadSummary, ThreadView, TodayView, TopicSummary,
-    TopicView,
+    Event, FlagView, GroundFoundation, GroundQuestion, GroundView, KeyView, LectureView, LinkedTopic, MapEdge, MapNode,
+    MapView, MessageView, NextStep, NoteView, OptionFeedback, OutcomeProgress, OutcomeStanding, OutcomeView,
+    PrefillView, ProgressView, ProviderView, ReadingItem, ReadingListView, Reply, ResourceView, Role, RolesView,
+    SettingsView, SlotView, SourceView, StateCounts, SuggestionView, SummaryView, ThreadSummary, ThreadView, TodayView,
+    TopicSummary, TopicView,
 };
 pub use config::{CONFIG_FILE, Config};
 pub use kizn_model::Http;
@@ -86,6 +87,8 @@ pub struct Ctx {
     tutoring: Arc<Mutex<HashMap<String, String>>>,
     /// Wakes the bank writer (the same one App starts).
     bank_wake: Arc<tokio::sync::Notify>,
+    /// Concepts whose lectures are being written right now.
+    lecturing: Arc<Mutex<std::collections::HashSet<String>>>,
 }
 
 pub struct App {
@@ -133,6 +136,7 @@ impl App {
                 tutoring: Arc::default(),
                 grounding: Arc::default(),
                 bank_wake: bank_wake.clone(),
+                lecturing: Arc::default(),
             },
             drafting: Mutex::new(HashMap::new()),
             bank_wake,

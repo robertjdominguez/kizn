@@ -287,6 +287,61 @@ pub struct ConceptPageView {
     #[ts(type = "number")]
     pub checked: i64,
     pub note: Option<String>,
+    /// "none" (not written yet), "writing", "ready", "unbacked" (kizn
+    /// can't back one with sources yet) or "failed".
+    pub lecture_state: String,
+    pub lecture: Option<LectureView>,
+    /// Why there's no lecture, when it's unbacked or failed.
+    pub lecture_reason: Option<String>,
+}
+
+/// A concept explained in depth; every part's footnotes are sources kizn
+/// read, and the checker found they support it.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct LectureView {
+    pub key_terms: Vec<TermView>,
+    pub sections: Vec<SectionView>,
+    pub misconceptions: Vec<MixUpView>,
+    pub footnotes: Vec<FootnoteView>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct TermView {
+    pub term: String,
+    pub meaning: String,
+    pub notes: Vec<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct SectionView {
+    pub heading: String,
+    pub paragraphs: Vec<ParagraphView>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct ParagraphView {
+    pub text: String,
+    /// Its footnote numbers.
+    pub notes: Vec<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct MixUpView {
+    pub belief: String,
+    pub correction: String,
+    pub notes: Vec<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct FootnoteView {
+    pub n: u32,
+    pub source: SourceView,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]

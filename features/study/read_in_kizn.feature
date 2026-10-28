@@ -1,24 +1,16 @@
-Feature: Read in kizn
+Feature: Sources for a concept
   As a learner studying a concept
-  I want to read or watch its resources inside kizn, with my notes beside them
-  So that I can learn it properly, and the tutor can discuss what I'm reading
+  I want the sources kizn read for it, to explore further, and my notes kept with it
+  So that its lecture rests on sources I can open, and the tutor can draw on them
 
   Background:
     Given a configured author model
-
-  @domain @ui
-  Scenario: Reading a page
-    Given a concept with a verified page
-    When I open it in kizn
-    Then I read its text with the concept on top
-    And not the page's scripts or navigation
 
   @domain @ui
   Scenario: A video is offered with its transcript
     Given I missed a concept in my starting point
     When kizn looks for resources for it
     Then a video with captions is offered
-    And opening it shows its transcript with timestamps
 
   @domain
   Scenario: A video without a transcript isn't offered
@@ -29,7 +21,7 @@ Feature: Read in kizn
   @domain @ui
   Scenario: Notes stay with the concept
     Given a concept with a verified page
-    When I write a note while reading it
+    When I write a note while reading its lecture
     And I come back to the concept later
     Then the note is there
 

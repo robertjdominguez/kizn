@@ -1,4 +1,15 @@
-import { Check, ExternalLink, FileText, LoaderCircle, MessageCircle, Play, Plus, RotateCw, X } from "lucide-react";
+import {
+  BookOpen,
+  Check,
+  ExternalLink,
+  FileText,
+  LoaderCircle,
+  MessageCircle,
+  Play,
+  Plus,
+  RotateCw,
+  X,
+} from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ConceptPageView } from "../bindings/ConceptPageView";
@@ -11,7 +22,7 @@ import { whenDue } from "../practice/Summary";
 import { call } from "../rpc";
 import { TutorSheet } from "../tutor/TutorSheet";
 import { conversations, useConversations } from "../tutor/useConversations";
-import { Reader } from "./Reader";
+import { LectureReader } from "./LectureReader";
 
 // A concept to learn, sliding in over whatever opened it (the summary): the
 // concept, the pages kizn checked and could read, and "Mark studied".
@@ -49,13 +60,13 @@ function Sheet({ conceptId, onClose }: { conceptId: string; onClose: () => void 
   const [c, setC] = useState<ConceptPageView | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  // A resource open in the reader, over the sheet.
-  const [reading, setReading] = useState<string | null>(null);
+  // The lecture open in the reader, over the sheet.
+  const [reading, setReading] = useState(false);
   // Asking the tutor about the concept, over the sheet.
   const [asking, setAsking] = useState(false);
   const [talks, recount] = useConversations({ kind: "concept", concept_id: conceptId });
   const readingNow = useRef<string | null>(null);
-  readingNow.current = reading ?? (asking ? "asking" : null);
+  readingNow.current = reading ? "reading" : asking ? "asking" : null;
 
   const load = useCallback(() => {
     call({ type: "get_concept", concept_id: conceptId })
@@ -63,7 +74,7 @@ function Sheet({ conceptId, onClose }: { conceptId: string; onClose: () => void 
       .catch((e: Error) => setError(e.message));
   }, [conceptId]);
   const closeReader = useCallback(() => {
-    setReading(null);
+    setReading(false);
     load();
   }, [load]);
 
@@ -133,36 +144,37 @@ function Sheet({ conceptId, onClose }: { conceptId: string; onClose: () => void 
                 <span className="text-ink-4">{conversations(talks)}</span>
               </button>
             </motion.div>
-            <motion.section variants={pop} aria-labelledby="sources-title" className="flex flex-col gap-2">
-              <h3 id="sources-title" className="text-[11px] font-semibold uppercase tracking-wide text-ink-3">
-                Learn from
+            <motion.section variants={pop} aria-labelledby="reading-title" className="flex flex-col gap-2">
+              <h3 id="reading-title" className="text-[11px] font-semibold uppercase tracking-wide text-ink-3">
+                Reading
               </h3>
               <AnimatePresence mode="wait" initial={false}>
-                {c.finding === "finding" || c.finding === "not_started" ? (
-                  <motion.p
-                    key="finding"
-                    variants={fade}
-                    {...presence}
-                    className="flex items-center gap-2 text-sm text-ink-3"
-                  >
-                    <LoaderCircle size={14} className="animate-spin text-accent" aria-hidden />
-                    Finding pages kizn can check…
-                  </motion.p>
-                ) : c.sources.length > 0 ? (
-                  <motion.ul
-                    key="sources"
-                    variants={stage(0.08, 0.1)}
-                    initial="hidden"
-                    animate="shown"
-                    exit="gone"
-                    className="flex flex-col divide-y divide-hairline overflow-hidden rounded-lg border border-hairline bg-canvas"
-                  >
+                <motion.div key={readingState(c)} variants={fade} {...presence}>
+                  <ReadingCard c={c} busy={busy} onRead={() => setReading(true)} onAgain={() => act("find_sources")} />
+                </motion.div>
+              </AnimatePresence>
+            </motion.section>
+            <AnimatePresence initial={false}>
+              {c.sources.length > 0 && (
+                <motion.section
+                  key="sources"
+                  variants={pop}
+                  initial="hidden"
+                  animate="shown"
+                  exit="gone"
+                  aria-labelledby="sources-title"
+                  className="flex flex-col gap-2"
+                >
+                  <h3 id="sources-title" className="text-[11px] font-semibold uppercase tracking-wide text-ink-3">
+                    Explore further
+                  </h3>
+                  <ul className="flex flex-col divide-y divide-hairline overflow-hidden rounded-lg border border-hairline bg-canvas">
                     {c.sources.map((s) => (
-                      <motion.li key={s.url} variants={pop} className="group flex items-center">
+                      <li key={s.url}>
                         <button
                           type="button"
-                          onClick={() => setReading(s.id)}
-                          className="flex min-w-0 flex-1 items-center gap-3 px-3 py-2.5 text-left transition-colors hover:bg-raised/40"
+                          onClick={() => openExternal(s.url)}
+                          className="group flex w-full min-w-0 items-center gap-3 px-3 py-2.5 text-left transition-colors hover:bg-raised/40"
                         >
                           {s.kind === "video" ? (
                             <Play size={13} className="shrink-0 text-ink-4" aria-label="Video" />
@@ -171,39 +183,15 @@ function Sheet({ conceptId, onClose }: { conceptId: string; onClose: () => void 
                           )}
                           <span className="min-w-0 flex-1 truncate text-sm text-ink">{s.title}</span>
                           <span className="shrink-0 text-xs text-ink-4">{s.host}</span>
+                          <ExternalLink size={12} className="shrink-0 text-ink-4 group-hover:text-accent" aria-hidden />
                         </button>
-                        <button
-                          type="button"
-                          onClick={() => openExternal(s.url)}
-                          aria-label={s.kind === "video" ? "Watch on YouTube" : "Open in browser"}
-                          title={s.kind === "video" ? "Watch on YouTube" : "Open in browser"}
-                          className="px-3 py-2.5 text-ink-4 transition-colors hover:text-accent"
-                        >
-                          <ExternalLink size={13} aria-hidden />
-                        </button>
-                      </motion.li>
+                      </li>
                     ))}
-                  </motion.ul>
-                ) : (
-                  <motion.div key="none" variants={fade} {...presence} className="flex flex-col gap-2">
-                    <p className="text-sm text-ink-3">
-                      kizn couldn't find anything it could check for this one
-                      {c.checked > 0 && ` (it tried ${c.checked})`}.
-                    </p>
-                    <button
-                      type="button"
-                      disabled={busy}
-                      onClick={() => act("find_sources")}
-                      className="flex w-fit items-center gap-1.5 rounded-md px-2 py-1 text-xs text-ink-3 transition-colors hover:bg-raised hover:text-ink disabled:opacity-50"
-                    >
-                      <RotateCw size={12} aria-hidden /> Try again
-                    </button>
-                  </motion.div>
-                )}
-              </AnimatePresence>
-              <p className="text-xs text-ink-4">kizn opened each of these and checked it's about this concept.</p>
-              <AddOwn conceptId={c.concept_id} onAdded={setC} />
-            </motion.section>
+                  </ul>
+                  <AddOwn conceptId={c.concept_id} onAdded={setC} />
+                </motion.section>
+              )}
+            </AnimatePresence>
             {c.note && (
               <motion.section variants={pop} aria-label="Your note" className="flex flex-col gap-1.5">
                 <h3 className="text-[11px] font-semibold uppercase tracking-wide text-ink-3">Your note</h3>
@@ -265,7 +253,15 @@ function Sheet({ conceptId, onClose }: { conceptId: string; onClose: () => void 
           recount();
         }}
       />
-      <Reader sourceId={reading} onClose={closeReader} />
+      {c && (
+        <LectureReader
+          conceptId={c.concept_id}
+          concept={c.statement}
+          lecture={reading ? c.lecture : null}
+          note={c.note}
+          onClose={closeReader}
+        />
+      )}
     </>
   );
 }
@@ -322,3 +318,69 @@ function AddOwn({ conceptId, onAdded }: { conceptId: string; onAdded: (c: Concep
     </form>
   );
 }
+
+const readingState = (c: ConceptPageView) =>
+  c.finding === "finding" || c.finding === "not_started" ? "finding" : c.lecture_state;
+
+// Where the concept's lecture is: being found or written (written when it's
+// opened, from sources kizn reads and checks), ready to read, or not
+// possible yet, with why and a way to look again.
+function ReadingCard({
+  c,
+  busy,
+  onRead,
+  onAgain,
+}: {
+  c: ConceptPageView;
+  busy: boolean;
+  onRead: () => void;
+  onAgain: () => void;
+}) {
+  const state = readingState(c);
+  if (state === "finding" || state === "writing" || state === "none") {
+    return (
+      <p className="flex items-center gap-2 text-sm text-ink-3">
+        <LoaderCircle size={14} className="animate-spin text-accent" aria-hidden />
+        {state === "finding"
+          ? "Finding sources kizn can read…"
+          : "Writing it from its sources, and checking every part…"}
+      </p>
+    );
+  }
+  if (state === "ready" && c.lecture) {
+    const paragraphs = c.lecture.sections.reduce((n, s) => n + s.paragraphs.length, 0);
+    return (
+      <button
+        type="button"
+        onClick={onRead}
+        className="group flex w-full flex-col gap-1 rounded-xl bg-canvas px-4 py-3.5 text-left ring-1 ring-hairline transition-colors hover:ring-accent/50"
+      >
+        <span className="flex items-center gap-2 text-sm font-semibold text-ink">
+          <BookOpen size={14} className="text-accent" aria-hidden /> Read the lecture
+        </span>
+        <span className="text-xs text-ink-3">
+          {plural(c.lecture.key_terms.length, "key term")} · {plural(paragraphs, "paragraph")} · from{" "}
+          {plural(c.lecture.footnotes.length, "source")}, every part checked against them
+        </span>
+      </button>
+    );
+  }
+  return (
+    <div className="flex flex-col gap-2">
+      <p className="text-sm text-ink-3">
+        kizn couldn't write a reading it can back with sources yet
+        {c.lecture_reason ? ` (${c.lecture_reason})` : ""}.
+      </p>
+      <button
+        type="button"
+        disabled={busy}
+        onClick={onAgain}
+        className="flex w-fit items-center gap-1.5 rounded-md px-2 py-1 text-xs text-ink-3 transition-colors hover:bg-raised hover:text-ink disabled:opacity-50"
+      >
+        <RotateCw size={12} aria-hidden /> Look again
+      </button>
+    </div>
+  );
+}
+
+const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`;

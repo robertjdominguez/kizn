@@ -35,17 +35,11 @@ Feature: Ask about this
     And the concept shows 1 conversation
 
   @domain @ui
-  Scenario: Asking about a passage
-    Given a concept with a verified page
-    When I pick a passage in the page and ask "Explain this"
-    Then the tutor's reply is about that passage, from the page
-    And the page shows 1 conversation
-
-  @domain
-  Scenario: Asking about a moment in a video
-    Given a concept with a verified page
-    When I pick a moment in its video and ask "What happens here?"
-    Then the tutor's reply says when in the video
+  Scenario: Asking about a passage in its lecture
+    Given a concept with a lecture
+    When I pick a passage in its lecture and ask "Explain this"
+    Then the tutor's reply is about that passage
+    And the concept shows 1 conversation
 
   @domain
   Scenario: The tutor comes first
