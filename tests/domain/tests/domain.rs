@@ -49,7 +49,6 @@ struct Kizn {
     deltas: usize,
     /// Progress and answers before something that mustn't move them.
     progress_before: Option<String>,
-    resource: Option<kizn_app::ResourceView>,
     added: Option<Result<kizn_app::ConceptPageView, String>>,
     /// Writing batches started while the last tutor reply streamed.
     batches_during_reply: Option<i64>,
@@ -92,7 +91,6 @@ impl Kizn {
             threads: vec![],
             deltas: 0,
             progress_before: None,
-            resource: None,
             added: None,
             batches_during_reply: None,
             reading: None,
@@ -1364,58 +1362,13 @@ async fn reopen_either(w: &mut Kizn) {
     }
 }
 
-// --- Read in kizn ------------------------------------------------------------------
-
-impl Kizn {
-    async fn open_resource(&mut self, kind: &str) -> kizn_app::ResourceView {
-        let id = self
-            .concept
-            .as_ref()
-            .expect("no concept open")
-            .sources
-            .iter()
-            .find(|s| s.kind == kind)
-            .unwrap_or_else(|| panic!("no {kind} offered"))
-            .id
-            .clone();
-        match self.command(Command::GetResource { source_id: id }).await {
-            Ok(Reply::Resource(r)) => {
-                self.resource = Some(r.clone());
-                r
-            }
-            other => panic!("expected a Resource, got {other:?}"),
-        }
-    }
-}
+// --- Sources for a concept ------------------------------------------------------------------
 
 #[given("a concept with a verified page")]
 async fn concept_with_page(w: &mut Kizn) {
     missed_one(w).await;
     open_concept(w).await;
     assert!(w.concept.as_ref().unwrap().sources.iter().any(|s| s.kind == "page"));
-}
-
-#[when("I open it in kizn")]
-async fn open_in_kizn(w: &mut Kizn) {
-    w.open_resource("page").await;
-}
-
-#[then("I read its text with the concept on top")]
-fn read_text(w: &mut Kizn) {
-    let r = w.resource.as_ref().unwrap();
-    assert_eq!(r.concept, w.concept.as_ref().unwrap().statement);
-    assert!(r.blocks.iter().any(|b| b.kind == "h") && r.blocks.iter().filter(|b| b.kind == "p").count() >= 3);
-    assert!(r.cues.is_empty());
-}
-
-#[then("not the page's scripts or navigation")]
-fn no_scripts(w: &mut Kizn) {
-    let r = w.resource.as_ref().unwrap();
-    assert!(
-        r.blocks.iter().all(|b| !b.text.contains("analytics()") && !b.text.contains("Docs Guides Reference")),
-        "{:#?}",
-        r.blocks
-    );
 }
 
 #[when("kizn looks for resources for it")]
@@ -1430,14 +1383,6 @@ fn video_offered(w: &mut Kizn) {
     assert!(v.url.contains("captioned-") && !v.automatic, "{v:?}");
 }
 
-#[then("opening it shows its transcript with timestamps")]
-async fn transcript_shown(w: &mut Kizn) {
-    let r = w.open_resource("video").await;
-    assert!(r.blocks.is_empty());
-    assert_eq!(r.cues.len(), 40);
-    assert!(r.cues.windows(2).all(|p| p[0].start < p[1].start));
-}
-
 #[then("the video without captions is recorded as having no transcript")]
 fn no_transcript(w: &mut Kizn) {
     let concept_id = w.concept.as_ref().unwrap().concept_id.clone();
@@ -1447,9 +1392,8 @@ fn no_transcript(w: &mut Kizn) {
     assert!(row.reason.as_deref().unwrap_or("").starts_with("no transcript"), "{row:?}");
 }
 
-#[when("I write a note while reading it")]
+#[when("I write a note while reading its lecture")]
 async fn write_note(w: &mut Kizn) {
-    w.open_resource("page").await;
     let concept_id = w.concept.as_ref().unwrap().concept_id.clone();
     let r = w.command(Command::SaveNote { concept_id, text: "Layers are shared, so rebuilds are cheap.".into() }).await;
     assert!(matches!(r, Ok(Reply::Note(_))), "{r:?}");
@@ -1524,47 +1468,6 @@ fn reply_draws_resources(w: &mut Kizn) {
 async fn concept_conversations(w: &mut Kizn, n: usize) {
     let concept_id = w.concept.as_ref().unwrap().concept_id.clone();
     assert_eq!(w.threads_on(kizn_app::Anchor::Concept { concept_id }).await.len(), n);
-}
-
-#[when(expr = "I pick a passage in the page and ask {string}")]
-async fn ask_passage(w: &mut Kizn, text: String) {
-    let r = w.open_resource("page").await;
-    let passage = r.blocks.iter().find(|b| b.kind == "p").unwrap().text.chars().take(60).collect::<String>();
-    let source_id = r.source.id.clone();
-    w.ask_on(kizn_app::Anchor::Resource { source_id }, &text, Some(passage), true).await;
-}
-
-#[then("the tutor's reply is about that passage, from the page")]
-fn reply_passage(w: &mut Kizn) {
-    let r = w.reply();
-    let title = &w.resource.as_ref().unwrap().source.title;
-    assert!(
-        r.starts_with(&format!("About {title}")) && r.contains("On \"This page explains") && r.contains("From it:"),
-        "{r}"
-    );
-    let asked = &w.thread.as_ref().unwrap().messages[0].text;
-    assert!(asked.starts_with("> This page explains") && asked.ends_with("Explain this"), "{asked}");
-}
-
-#[then(expr = "the page shows {int} conversation")]
-async fn page_conversations(w: &mut Kizn, n: usize) {
-    let source_id = w.resource.as_ref().unwrap().source.id.clone();
-    assert_eq!(w.threads_on(kizn_app::Anchor::Resource { source_id }).await.len(), n);
-}
-
-#[when(expr = "I pick a moment in its video and ask {string}")]
-async fn ask_moment(w: &mut Kizn, text: String) {
-    let r = w.open_resource("video").await;
-    let cue = &r.cues[13];
-    let passage = format!("{}s: {}", cue.start, cue.text);
-    let source_id = r.source.id.clone();
-    w.ask_on(kizn_app::Anchor::Resource { source_id }, &text, Some(passage), true).await;
-}
-
-#[then("the tutor's reply says when in the video")]
-fn reply_moment(w: &mut Kizn) {
-    let r = w.reply();
-    assert!(r.contains("From it at ") && r.contains("On \"65s:"), "{r}");
 }
 
 #[when("a question about it is replaced")]
@@ -2379,4 +2282,143 @@ fn topped_up(w: &mut Kizn) {
             assert_eq!(unseen, 2, "outcome {ord}'s concept {concept}");
         }
     }
+}
+
+// --- Lectures ----------------------------------------------------------------------
+
+#[given("a checker that can't back a lecture's first paragraph")]
+async fn doubting_checker(w: &mut Kizn) {
+    w.use_for(Role::Checker, "picky", Behaviour::CheckerDisagrees, true).await;
+}
+
+#[when("I open it and its lecture is written")]
+async fn lecture_written(w: &mut Kizn) {
+    let concept_id = w.missed_concept();
+    for _ in 0..1500 {
+        let c = w.concept_from(Command::GetConcept { concept_id: concept_id.clone() }).await;
+        if c.finding != "finding" && !matches!(c.lecture_state.as_str(), "none" | "writing") {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    panic!("the lecture wasn't written: {:?}", w.concept.as_ref().map(|c| &c.lecture_state));
+}
+
+impl Kizn {
+    fn lecture(&self) -> &kizn_app::LectureView {
+        let c = self.concept.as_ref().expect("a concept page");
+        assert_eq!(c.lecture_state, "ready", "{:?}", c.lecture_reason);
+        c.lecture.as_ref().expect("a lecture")
+    }
+
+    /// The missed concept's questions: their stems and right answers, and
+    /// the misconceptions their wrong options record.
+    fn concept_questions(&self) -> (Vec<String>, Vec<String>) {
+        let concept_id = self.missed_concept();
+        let store = self.store();
+        let outcome = store.concept(&concept_id).unwrap().unwrap().outcome_id;
+        let (mut wording, mut mixups) = (vec![], vec![]);
+        for i in store.items(&outcome, None).unwrap() {
+            if i.concept_ids.first() != Some(&concept_id) {
+                continue;
+            }
+            wording.push(i.stem.clone());
+            let options: Vec<kizn_core::bank::ItemOption> =
+                serde_json::from_str(i.options_json.as_deref().unwrap_or("[]")).unwrap_or_default();
+            for o in options {
+                if o.correct {
+                    wording.push(o.text);
+                } else if let Some(m) = o.misconception {
+                    mixups.push(m);
+                }
+            }
+        }
+        (wording, mixups)
+    }
+}
+
+#[then("every paragraph, key term and mix-up cites the sources kizn read")]
+fn lecture_cites(w: &mut Kizn) {
+    let l = w.lecture();
+    let notes: Vec<&Vec<u32>> = l
+        .sections
+        .iter()
+        .flat_map(|s| s.paragraphs.iter().map(|p| &p.notes))
+        .chain(l.key_terms.iter().map(|t| &t.notes))
+        .chain(l.misconceptions.iter().map(|m| &m.notes))
+        .collect();
+    assert!(notes.iter().all(|n| !n.is_empty()), "every part has a footnote");
+    let footnotes: Vec<u32> = l.footnotes.iter().map(|f| f.n).collect();
+    assert!(notes.iter().all(|n| n.iter().all(|x| footnotes.contains(x))), "every footnote is listed");
+    assert!(l.footnotes.len() >= 2, "it draws on at least two sources");
+    let verified: Vec<String> = w
+        .store()
+        .sources(&w.missed_concept())
+        .unwrap()
+        .into_iter()
+        .filter(|s| s.status == "verified")
+        .map(|s| s.url)
+        .collect();
+    for f in &l.footnotes {
+        assert!(verified.contains(&f.source.url), "{} is a source kizn read", f.source.url);
+    }
+}
+
+#[then("it takes on the mix-ups my wrong answers showed")]
+fn lecture_mixups(w: &mut Kizn) {
+    let (_, mixups) = w.concept_questions();
+    let l = w.lecture();
+    assert!(!l.misconceptions.is_empty());
+    for m in &l.misconceptions {
+        assert!(mixups.contains(&m.belief), "{:?} is one of the questions' misconceptions", m.belief);
+    }
+}
+
+#[then("none of it repeats a question's wording")]
+fn lecture_no_giveaway(w: &mut Kizn) {
+    let (wording, _) = w.concept_questions();
+    let l = w.lecture();
+    for p in l.sections.iter().flat_map(|s| &s.paragraphs) {
+        assert!(!wording.iter().any(|q| p.text.contains(q.as_str())), "{:?} repeats a question", p.text);
+    }
+}
+
+#[then("that paragraph isn't in it, and the rest still cites its sources")]
+fn lecture_left_out(w: &mut Kizn) {
+    let l = w.lecture();
+    let texts: Vec<&str> = l.sections.iter().flat_map(|s| s.paragraphs.iter().map(|p| p.text.as_str())).collect();
+    assert!(!texts.iter().any(|t| t.starts_with("In the first source's words")), "{texts:?}");
+    assert!(texts.len() >= 2);
+    assert!(l.sections.iter().flat_map(|s| &s.paragraphs).all(|p| !p.notes.is_empty()));
+}
+
+#[then("no lecture is written for concepts I haven't missed or opened")]
+fn no_lectures_yet(w: &mut Kizn) {
+    let store = w.store();
+    for o in store.outcomes(&w.topic_id()).unwrap() {
+        for c in store.concepts(&o.id).unwrap() {
+            assert!(store.lecture(&c.id).unwrap().is_none(), "{} has a lecture", c.statement);
+        }
+    }
+}
+
+#[given("a concept with a lecture")]
+async fn concept_with_lecture(w: &mut Kizn) {
+    missed_one(w).await;
+    lecture_written(w).await;
+}
+
+#[when(expr = "I pick a passage in its lecture and ask {string}")]
+async fn ask_lecture_passage(w: &mut Kizn, text: String) {
+    let passage: String = w.lecture().sections[0].paragraphs[0].text.chars().take(60).collect();
+    let concept_id = w.missed_concept();
+    w.goal = Some(passage.clone());
+    w.ask_on(kizn_app::Anchor::Concept { concept_id }, &text, Some(passage), true).await;
+}
+
+#[then("the tutor's reply is about that passage")]
+fn reply_about_passage(w: &mut Kizn) {
+    let passage = w.goal.clone().unwrap();
+    let r = w.reply();
+    assert!(r.contains(&format!("On \"{passage}")), "{r}");
 }

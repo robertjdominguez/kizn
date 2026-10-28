@@ -577,6 +577,59 @@ impl FakeServer {
                     {"title": named("Networking basics"), "why": "services talk over ports and addresses"},
                 ]}))
             }
+            // A lecture citing the sources it was given: two sections, a key
+            // term, and each misconception listed taken on.
+            "write-lecture" => {
+                let concept = s("concept");
+                let ids: Vec<String> = input["sources"]
+                    .as_array()
+                    .map(|a| a.iter().filter_map(|x| x["id"].as_str().map(str::to_string)).collect())
+                    .unwrap_or_default();
+                let first = ids.first().cloned().unwrap_or_default();
+                let second = ids.get(1).cloned().unwrap_or_else(|| first.clone());
+                let mixups: Vec<Value> = input["misconceptions"]
+                    .as_array()
+                    .map(|a| {
+                        a.iter()
+                            .take(2)
+                            .filter_map(|m| m.as_str())
+                            .map(|m| {
+                                json!({"belief": m, "correction": format!("The sources say otherwise about {concept}."), "cites": [second]})
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                Some(json!({
+                    "key_terms": [{"term": concept, "meaning": format!("what the sources describe as {concept}"), "cites": [first]}],
+                    "sections": [
+                        {"heading": "What it is", "paragraphs": [
+                            {"text": format!("In the first source's words, {concept} comes first."), "cites": [first]},
+                            {"text": format!("The second source adds how {concept} works in use."), "cites": [second]}
+                        ]},
+                        {"heading": "Why it matters", "paragraphs": [
+                            {"text": format!("Both sources tie {concept} to everyday work."), "cites": [first, second]}
+                        ]}
+                    ],
+                    "misconceptions": mixups,
+                }))
+            }
+            // Every claim supported, unless it's a doubting checker: then the
+            // first paragraph never is.
+            "verify-lecture" => {
+                let verdicts: Vec<Value> = input["claims"]
+                    .as_array()
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|c| c["id"].as_str())
+                            .map(|id| {
+                                let ok = !(b == Behaviour::CheckerDisagrees && id == "p0.0");
+                                json!({"id": id, "supported": ok, "why": if ok { "the excerpts say so" } else { "not in the excerpts" }})
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                Some(json!({"verdicts": verdicts}))
+            }
             "check-ground" => {
                 // Three questions on the foundation, the key first; why each.
                 let f = s("foundation");
@@ -626,9 +679,10 @@ impl FakeServer {
                         )
                     }
                     _ => format!(
-                        "About {}: you asked {}. From {}: {}",
+                        "About {}: you asked {}.{} From {}: {}",
                         anchor["title"].as_str().unwrap_or("this"),
                         s("question"),
+                        input["passage"].as_str().map(|p| format!(" On \"{p}\".")).unwrap_or_default(),
                         anchor["resources"][0]["title"].as_str().unwrap_or("my own knowledge"),
                         anchor["resources"][0]["excerpts"][0]["text"]
                             .as_str()

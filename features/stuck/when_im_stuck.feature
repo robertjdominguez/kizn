@@ -15,6 +15,6 @@ Feature: When I'm stuck
     And I keep the question
     And I finish the rest of the set
     And I open what I missed
-    And I pick a passage in the page and ask "Explain this"
+    And I read its lecture, pick a passage and ask "Explain this"
     And I close the tutor and the reader, and mark it studied
     Then Today says I'm all caught up

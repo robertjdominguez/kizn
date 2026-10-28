@@ -101,7 +101,7 @@ impl Checked {
     }
 }
 
-fn source_view(s: &SourceRow) -> SourceView {
+pub(crate) fn source_view(s: &SourceRow) -> SourceView {
     SourceView {
         id: s.id.clone(),
         kind: s.kind.clone(),
@@ -318,7 +318,11 @@ impl Ctx {
         };
         let standing = self.standing_of_concept(&topic.id, concept_id)?;
         let now = self.deps.clock.now();
+        let (lecture_state, lecture, lecture_reason) = self.lecture_view(concept_id)?;
         Ok(ConceptPageView {
+            lecture_state,
+            lecture,
+            lecture_reason,
             concept_id: concept.id,
             statement: concept.statement,
             topic_id: topic.id,
@@ -334,16 +338,23 @@ impl Ctx {
         })
     }
 
-    /// The page, starting the search for sources if there's nothing yet.
+    /// The page, starting what it needs: the search for sources if there's
+    /// nothing yet (its lecture follows), or the lecture if the sources are
+    /// there and it isn't. Written when it's opened, not before.
     pub(crate) fn open_concept(&self, concept_id: &str) -> Result<ConceptPageView, AppError> {
         let page = self.concept_page(concept_id)?;
         if page.finding == "not_started" {
             self.start_finding(concept_id);
             return self.concept_page(concept_id);
         }
+        if page.finding == "found" && page.lecture_state == "none" {
+            self.start_lecture(concept_id);
+            return self.concept_page(concept_id);
+        }
         Ok(page)
     }
 
+    /// Looks again for sources; the lecture is written again from them.
     pub(crate) fn find_again(&self, concept_id: &str) -> Result<ConceptPageView, AppError> {
         self.start_finding(concept_id);
         self.concept_page(concept_id)
@@ -368,6 +379,8 @@ impl Ctx {
                 eprintln!("kizn: finding sources: {e}");
             }
             ctx.sourcing.lock().unwrap().remove(&id);
+            // Looked for because it was opened or missed: its lecture next.
+            ctx.start_lecture(&id);
             if let Ok(Some(c)) = ctx.store.concept(&id)
                 && let Ok(Some(o)) = ctx.store.outcome(&c.outcome_id)
             {
