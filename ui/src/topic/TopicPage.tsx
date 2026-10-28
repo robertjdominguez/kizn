@@ -449,10 +449,9 @@ function Sidebar({ topic: t, from }: { topic: TopicView; from?: "map" }) {
               transition={{ duration: 0.4, ease: EASE }}
             />
           </span>
-          <span className="text-xs tabular-nums text-ink-4">
-            {t.active} of ~{t.expected}
-          </span>
+          <span className="text-xs tabular-nums text-ink-4">{t.active} ready</span>
         </div>
+        <p className="text-[11px] text-ink-4">Written a few days ahead of your practice, more as you go.</p>
         <AnimatePresence initial={false}>
           {resting.length > 0 && <Resting key="resting" outcomes={resting} />}
           {failed.map((o) => (

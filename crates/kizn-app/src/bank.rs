@@ -4,12 +4,12 @@
 //! with its reason and never shown. Nobody waits on this, so it can be slow
 //! and retried.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 use kizn_core::bank::{
-    BankedItem, CheckContext, Concept, ItemKind, LETTERS, OutcomeBank, Slot, TopicRef, bank_needs, blind_verdict,
-    check_item, next_across, parse_blind, shuffled_order,
+    BankedItem, CheckContext, Concept, ItemKind, LETTERS, OutcomeBank, Slot, TopicRef, ahead_size, blind_verdict,
+    check_item, needs_ahead, next_across, parse_blind, shuffled_order,
 };
 use kizn_core::{Tier, sql_time};
 use kizn_model::ModelError;
@@ -100,8 +100,8 @@ impl Ctx {
     /// what's stored, so a restart carries straight on.
     fn next_job(&self) -> Result<Option<Job>, AppError> {
         let now = self.now();
-        let attempted: HashSet<String> =
-            self.store.attempts(None)?.into_iter().filter(|a| a.disputed_at.is_none()).map(|a| a.item_id).collect();
+        let attempted = self.attempted()?;
+        let practised = self.practised(&attempted)?;
         // Each topic's outcomes, items and which outcomes can be written now.
         let mut topics = vec![];
         for t in self.store.all_topics()?.into_iter().filter(|t| t.status == "confirmed") {
@@ -112,45 +112,32 @@ impl Ctx {
                 let items = self.store.items(&o.id, Some("active"))?;
                 data.push((o, concept_ids, items));
             }
+            let eligible: Vec<_> = data
+                .into_iter()
+                .filter(|(o, ..)| {
+                    !(matches!(o.bank_state.as_str(), "failed" | "resting")
+                        && o.retry_at.as_deref().is_some_and(|r| r > now.as_str()))
+                })
+                .map(|(o, concept_ids, items)| (o.clone(), concept_ids, items))
+                .collect();
+            // Ready: nothing practice can reach is waiting to be written.
+            let banks = outcome_banks(&eligible, &attempted, &practised);
+            let needs = needs_ahead(&banks);
             let mut moved = false;
-            let mut eligible = vec![];
-            for (o, concept_ids, items) in data {
-                let paused = matches!(o.bank_state.as_str(), "failed" | "resting")
-                    && o.retry_at.as_deref().is_some_and(|r| r > now.as_str());
-                if paused {
-                    continue;
-                }
-                let target = Tier::parse(&o.target_tier).unwrap_or(Tier::Understand);
-                let state = if bank_needs(target, &concept_ids, &banked(&items), &attempted).is_empty() {
-                    "ready"
-                } else {
-                    "waiting"
-                };
+            for (i, (o, ..)) in eligible.iter().enumerate() {
+                let state = if needs.iter().any(|(_, n, ..)| *n == i) { "waiting" } else { "ready" };
                 if o.bank_state != state {
                     self.store.set_bank_state(&o.id, state, None, None)?;
                     moved = true;
                 }
-                eligible.push((o.clone(), concept_ids, items));
             }
             if moved {
                 self.changed(&t.id);
             }
             topics.push(eligible);
         }
-        let banks: Vec<Vec<OutcomeBank>> = topics
-            .iter()
-            .map(|eligible| {
-                eligible
-                    .iter()
-                    .map(|(o, concept_ids, items)| OutcomeBank {
-                        target: Tier::parse(&o.target_tier).unwrap_or(Tier::Understand),
-                        concept_ids,
-                        active: banked(items),
-                        attempted: &attempted,
-                    })
-                    .collect()
-            })
-            .collect();
+        let banks: Vec<Vec<OutcomeBank>> =
+            topics.iter().map(|eligible| outcome_banks(eligible, &attempted, &practised)).collect();
         Ok(next_across(&banks).map(|(t, i, slot, count)| Job { outcome: topics[t][i].0.clone(), slot, count }))
     }
 
@@ -451,6 +438,57 @@ impl Ctx {
             Some((pick, also)) => blind_verdict(options, pick, &also),
             None => Some(format!("the checker's answer wasn't a letter: {reply}")),
         })
+    }
+}
+
+/// An outcome as `needs_ahead` sees it, from its row, concepts and items.
+pub(crate) fn outcome_banks<'a>(
+    outcomes: &'a [(OutcomeRow, Vec<String>, Vec<ItemRow>)],
+    attempted: &'a HashSet<String>,
+    practised: &'a HashSet<String>,
+) -> Vec<OutcomeBank<'a>> {
+    outcomes
+        .iter()
+        .map(|(o, concept_ids, items)| OutcomeBank {
+            target: Tier::parse(&o.target_tier).unwrap_or(Tier::Understand),
+            concept_ids,
+            active: banked(items),
+            attempted,
+            practised,
+        })
+        .collect()
+}
+
+impl Ctx {
+    /// Items answered (disputes don't count).
+    pub(crate) fn attempted(&self) -> Result<HashSet<String>, AppError> {
+        Ok(self.store.attempts(None)?.into_iter().filter(|a| a.disputed_at.is_none()).map(|a| a.item_id).collect())
+    }
+
+    /// Concepts the learner has answered a question on.
+    pub(crate) fn practised(&self, attempted: &HashSet<String>) -> Result<HashSet<String>, AppError> {
+        let mut out = HashSet::new();
+        for id in attempted {
+            if let Some(item) = self.store.item(id)? {
+                out.extend(item.concept_ids.first().cloned());
+            }
+        }
+        Ok(out)
+    }
+
+    /// How many questions each of a topic's outcomes is meant to hold right
+    /// now: what it has, plus what practice can reach and isn't written yet.
+    pub(crate) fn ahead_sizes(&self, topic_id: &str) -> Result<HashMap<String, i64>, AppError> {
+        let attempted = self.attempted()?;
+        let practised = self.practised(&attempted)?;
+        let mut data = vec![];
+        for o in self.store.outcomes(topic_id)? {
+            let concept_ids: Vec<String> = self.store.concepts(&o.id)?.into_iter().map(|c| c.id).collect();
+            let items = self.store.items(&o.id, Some("active"))?;
+            data.push((o, concept_ids, items));
+        }
+        let banks = outcome_banks(&data, &attempted, &practised);
+        Ok(data.iter().enumerate().map(|(i, (o, ..))| (o.id.clone(), ahead_size(&banks, i) as i64)).collect())
     }
 }
 

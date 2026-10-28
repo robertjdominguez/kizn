@@ -797,7 +797,7 @@ function ConfirmStep({ topic, onBack }: { topic: TopicView; onBack: () => void }
           ))}
         </ol>
         <p className="mt-3 border-t border-hairline pt-2 text-xs text-ink-3">
-          {topic.outcomes.length} outcomes · {concepts} concepts · about {topic.expected} practice questions to prepare
+          {topic.outcomes.length} outcomes · {concepts} concepts · questions written as you need them
         </p>
         {(toCheck.length > 0 || linking.length > 0) && (
           <p className="mt-2 text-xs text-ink-3">

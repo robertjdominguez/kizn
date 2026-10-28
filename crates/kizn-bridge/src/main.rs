@@ -330,17 +330,13 @@ fn inspect_bank(topic: Option<&str>) -> Result<(), String> {
     for t in topics {
         println!("{}  ({}, {})", t.title, t.id, t.status);
         for o in store.outcomes(&t.id).map_err(|e| e.to_string())? {
-            let tier = kizn_core::Tier::parse(&o.target_tier).unwrap_or(kizn_core::Tier::Understand);
-            let concepts = store.concepts(&o.id).map_err(|e| e.to_string())?;
             let items = store.items(&o.id, None).map_err(|e| e.to_string())?;
             let count = |status: &str| items.iter().filter(|i| i.status == status).count();
-            let full = kizn_core::bank::bank_size(tier, concepts.len());
             println!("  {}. {}", o.ord, o.statement);
             println!(
-                "     {}  {}/{} active · {} refused · {} retired{}",
+                "     {}  {} active · {} refused · {} retired{}",
                 o.bank_state,
                 count("active"),
-                full,
                 count("refused"),
                 count("retired"),
                 o.bank_error.as_deref().map(|e| format!("\n     error: {e}")).unwrap_or_default()

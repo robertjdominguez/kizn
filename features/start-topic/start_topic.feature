@@ -51,6 +51,15 @@ Feature: Start a topic
     Then kizn tries writing it again straight away
 
   @domain
+  Scenario: Questions are written a few days ahead, not all at once
+    Given a topic I've just confirmed
+    When the bank is written
+    Then outcomes 1 and 2 have 2 recall questions on each concept, and outcome 3 has none yet
+    When I answer every question in my first practice
+    And the bank is written
+    Then each concept I practised has 2 questions I haven't seen
+
+  @domain
   Scenario: A new topic's first questions come before an older topic's deeper ones
     Given a topic whose bank is still being written
     When I start and confirm another topic

@@ -6,7 +6,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use kizn_core::bank::{ItemKind, MAX_CONCEPTS, MAX_OUTCOMES, bank_size, slots_for};
+use kizn_core::bank::{ItemKind, MAX_CONCEPTS, MAX_OUTCOMES, slots_for};
 use kizn_core::{Tier, new_id, sql_time};
 use kizn_model::{Client, JsonMode};
 use kizn_store::{ConceptRow, OutcomeRow, TopicRow};
@@ -499,6 +499,7 @@ impl App {
         let topic = self.store.topic(topic_id)?.ok_or_else(|| AppError::Refused("there's no such topic".into()))?;
         let active = self.store.active_counts(&topic.id)?;
         let standings = if topic.status == "confirmed" { self.standings(&topic.id)? } else { Default::default() };
+        let ahead = self.ahead_sizes(&topic.id)?;
         let mut outcomes = vec![];
         for o in self.store.outcomes(&topic.id)? {
             let concepts: Vec<ConceptView> = self
@@ -538,7 +539,7 @@ impl App {
                 })
                 .collect();
             outcomes.push(OutcomeView {
-                expected: bank_size(tier, concepts.len()) as i64,
+                expected: ahead.get(&o.id).copied().unwrap_or(n),
                 id: o.id,
                 ord: o.ord,
                 statement: o.statement,
