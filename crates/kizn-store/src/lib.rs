@@ -21,6 +21,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("../migrations/0007_reading.sql"),
     include_str!("../migrations/0008_links.sql"),
     include_str!("../migrations/0009_ground.sql"),
+    include_str!("../migrations/0010_origin.sql"),
 ];
 
 pub const SCHEMA_VERSION: u32 = MIGRATIONS.len() as u32;

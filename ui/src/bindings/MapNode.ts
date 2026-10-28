@@ -6,6 +6,10 @@ export type MapNode = {
  */
 id: string, title: string, 
 /**
+ * A topic's origin ("learner" or "kizn"); "learner" for a suggestion.
+ */
+origin: string, 
+/**
  * "topic" or "suggestion".
  */
 kind: string, 

@@ -27,12 +27,27 @@ Feature: Foundations at setup
     When I answer the questions on "Linux processes" mostly wrong
     And I answer the questions on "Union filesystems" mostly right
     Then "Union filesystems" seems solid and "Linux processes" might be shaky
-    And "Linux processes" is on my map to start with, and "Union filesystems" isn't
+    And kizn prepares "Linux processes" underneath, to start with, and not "Union filesystems"
 
   @domain
-  Scenario: Starting a shaky foundation, in my own words
+  Scenario: A foundation kizn prepares needs no setting up
     Given I confirmed a topic keeping 2 foundations
-    When I start "Linux processes" from the check, with a goal of my own
-    Then a new topic "Linux processes" is being set up, with my goal
+    When I answer the questions on "Linux processes" mostly wrong
+    Then "Linux processes" is drafted and confirmed by itself, with its first questions written
+    And it proposes no foundations of its own
+
+  @domain
+  Scenario: Not needing a foundation kizn prepared
+    Given I confirmed a topic keeping 2 foundations
+    When I answer the questions on "Linux processes" mostly wrong
+    And I say I don't need "Linux processes"
+    Then "Linux processes" is gone from Today and my map
+
+  @domain
+  Scenario: Starting a suggested foundation, in my own words
+    Given I confirmed a topic keeping 2 foundations
+    And "Networking basics" is suggested under it for later
+    When I start "Networking basics" from my map, with a goal of my own
+    Then a new topic "Networking basics" is being set up, with my goal
     And the topic I confirmed rests on it
     And its draft is asked to keep to its own terms, as a foundation for the topic I confirmed

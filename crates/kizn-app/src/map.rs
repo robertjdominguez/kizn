@@ -119,6 +119,7 @@ impl crate::App {
             .map(|t| MapNode {
                 id: t.id.clone(),
                 title: t.title.clone(),
+                origin: t.origin.clone(),
                 kind: "topic".into(),
                 status: t.status.clone(),
                 layer: layer.get(t.id.as_str()).copied().unwrap_or(0) as i64,
@@ -133,6 +134,7 @@ impl crate::App {
         nodes.extend(suggestions.iter().map(|s| MapNode {
             id: s.id.clone(),
             title: s.title.clone(),
+            origin: "learner".into(),
             kind: "suggestion".into(),
             status: "suggested".into(),
             layer: layer.get(s.id.as_str()).copied().unwrap_or(0) as i64,

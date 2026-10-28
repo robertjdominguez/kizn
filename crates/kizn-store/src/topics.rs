@@ -17,6 +17,8 @@ pub struct TopicRow {
     pub draft_error: Option<String>,
     pub created_at: String,
     pub confirmed_at: Option<String>,
+    /// "learner", or "kizn" for a foundation it prepared by itself.
+    pub origin: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -165,7 +167,7 @@ pub struct BatchCounts {
     pub completion_tokens: i64,
 }
 
-const TOPIC_COLS: &str = "id, title, goal_md, status, draft_state, draft_error, created_at, confirmed_at";
+const TOPIC_COLS: &str = "id, title, goal_md, status, draft_state, draft_error, created_at, confirmed_at, origin";
 const OUTCOME_COLS: &str =
     "id, topic_id, ord, statement, target_tier, tier_reason, concepts_state, bank_state, bank_error, retry_at";
 const ITEM_COLS: &str = "id, topic_id, outcome_id, batch_id, kind, tier, concept_ids_json, stem, options_json, exemplar, source_ref, model_knowledge, status, status_reason, created_at";
@@ -180,6 +182,7 @@ fn topic(r: &Row) -> rusqlite::Result<TopicRow> {
         draft_error: r.get(5)?,
         created_at: r.get(6)?,
         confirmed_at: r.get(7)?,
+        origin: r.get(8)?,
     })
 }
 
@@ -223,9 +226,14 @@ impl Store {
     // ---- topics ----
 
     pub fn create_draft_topic(&self, id: &str, title: &str, goal: &str, now: &str) -> Result<()> {
+        self.create_topic_from(id, title, goal, now, "learner")
+    }
+
+    /// A draft set up by `origin` ("learner" or "kizn").
+    pub fn create_topic_from(&self, id: &str, title: &str, goal: &str, now: &str, origin: &str) -> Result<()> {
         self.conn.lock().unwrap().execute(
-            "INSERT INTO topics (id, title, goal_md, created_at, status, draft_state) VALUES (?1, ?2, ?3, ?4, 'draft', 'drafting')",
-            params![id, title, goal, now],
+            "INSERT INTO topics (id, title, goal_md, created_at, status, draft_state, origin) VALUES (?1, ?2, ?3, ?4, 'draft', 'drafting', ?5)",
+            params![id, title, goal, now, origin],
         )?;
         Ok(())
     }

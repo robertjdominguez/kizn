@@ -102,6 +102,25 @@ impl Ctx {
         new_id(self.deps.clock.as_ref(), self.deps.rng.as_ref())
     }
 
+    /// Confirms a drafted topic: every outcome gets its bank written. The
+    /// learner's Confirm and a foundation kizn prepared by itself both end
+    /// here.
+    pub(crate) fn confirm_drafted(&self, topic_id: &str) -> Result<(), AppError> {
+        let outcomes = self.store.outcomes(topic_id)?;
+        if outcomes.is_empty() {
+            return Err(AppError::Refused("a topic needs at least one outcome".into()));
+        }
+        for o in &outcomes {
+            if self.store.concepts(&o.id)?.is_empty() {
+                return Err(AppError::Refused(format!("outcome {} has no concepts yet", o.ord)));
+            }
+            self.store.set_bank_state(&o.id, "waiting", None, None)?;
+        }
+        self.store.confirm_topic(topic_id, &self.now())?;
+        self.bank_wake.notify_one();
+        Ok(())
+    }
+
     /// The topics this one is a foundation for (it's linked underneath them).
     pub(crate) fn supports(&self, topic_id: &str) -> Result<Vec<String>, AppError> {
         let mut titles = vec![];
@@ -175,6 +194,14 @@ async fn draft_inner(ctx: &Ctx, topic: &TopicRow, stop: &AtomicBool) -> Result<(
         ctx.store.set_concepts_state(&o.id, "done")?;
         ctx.changed(&topic.id);
     }
+    // A foundation kizn prepared by itself confirms itself, and proposes no
+    // foundations of its own: deeper gaps show up from the learner's misses
+    // (flags), not from guessing ever further down.
+    if topic.origin == "kizn" {
+        ctx.store.set_draft_state(&topic.id, "drafted", None)?;
+        ctx.confirm_drafted(&topic.id)?;
+        return Ok(());
+    }
     // Foundations last: proposed once the outcomes are known, never failing
     // the draft.
     ctx.draft_foundations(topic, &author).await?;
@@ -227,12 +254,55 @@ impl App {
     pub(crate) fn resolve_foundation(&self, suggestion_id: &str, action: &str) -> Result<crate::Reply, AppError> {
         let s = self.suggestion(suggestion_id)?;
         match action {
+            "prepare" => {
+                self.prepare_foundation(&s)?;
+                self.topic_view(&s.for_topic).map(crate::Reply::Topic)
+            }
+            // Not needed after all: one kizn prepared goes, with all it holds.
+            "dismiss" if s.topic_id.is_some() => {
+                let prepared = s.topic_id.as_deref().and_then(|id| self.store.topic(id).ok().flatten());
+                if let Some(t) = prepared.filter(|t| t.origin == "kizn") {
+                    self.delete_topic(&t.id)?;
+                }
+                self.set_aside_foundation(&s.id, true)?;
+                self.topic_view(&s.for_topic).map(crate::Reply::Topic)
+            }
             "later" | "dismiss" => {
                 let topic_id = self.set_aside_foundation(&s.id, action == "dismiss")?;
                 self.topic_view(&topic_id).map(crate::Reply::Topic)
             }
             other => Err(AppError::Refused(format!("there's no way to resolve a foundation called {other:?}"))),
         }
+    }
+
+    /// Answers a check question; when that makes a foundation shaky, kizn
+    /// prepares it underneath in the background (drafted in its own terms,
+    /// confirmed by itself, questions written), so the learner starts there
+    /// rather than setting up ever more topics by hand.
+    pub(crate) fn answer_and_prepare(
+        &self,
+        item_id: &str,
+        order: &[u32],
+        chosen: u32,
+    ) -> Result<crate::GroundView, AppError> {
+        let view = self.answer_ground(item_id, order, chosen)?;
+        let s = self.suggestion_of_item(item_id)?;
+        if s.status == "kept" && self.ground_result(&s.id)? == Some("shaky") {
+            self.prepare_foundation(&s)?;
+            return self.ground_view(&s.for_topic);
+        }
+        Ok(view)
+    }
+
+    /// Sets a suggested foundation up as a topic of kizn's, underneath the
+    /// topic it was suggested for: its draft runs and confirms by itself.
+    fn prepare_foundation(&self, s: &kizn_store::SuggestionRow) -> Result<(), AppError> {
+        if s.topic_id.is_some() {
+            return Ok(());
+        }
+        let goal = self.foundation_prefill(&s.id)?.goal;
+        self.start_topic_from(&s.title, &goal, Some(&s.id), "kizn")?;
+        Ok(())
     }
 
     fn suggestion(&self, suggestion_id: &str) -> Result<kizn_store::SuggestionRow, AppError> {
@@ -258,6 +328,18 @@ impl App {
     }
 
     pub(crate) fn start_topic(&self, title: &str, goal: &str, foundation: Option<&str>) -> Result<TopicView, AppError> {
+        self.start_topic_from(title, goal, foundation, "learner")
+    }
+
+    /// Starts a draft set up by `origin`: "learner", or "kizn" for a
+    /// foundation it prepares by itself.
+    fn start_topic_from(
+        &self,
+        title: &str,
+        goal: &str,
+        foundation: Option<&str>,
+        origin: &str,
+    ) -> Result<TopicView, AppError> {
         let (title, goal) = (title.trim(), goal.trim());
         if title.is_empty() {
             return Err(AppError::Refused("a topic needs a name".into()));
@@ -271,7 +353,7 @@ impl App {
         self.ctx.role_model(Role::Author)?;
         let id = self.ctx.id();
         let suggestion = foundation.map(|f| self.suggestion(f)).transpose()?;
-        self.store.create_draft_topic(&id, title, goal, &self.ctx.now())?;
+        self.store.create_topic_from(&id, title, goal, &self.ctx.now(), origin)?;
         // A foundation goes underneath its topic before drafting starts, so
         // the draft knows what it supports (and keeps to its own terms).
         if let Some(s) = suggestion {
@@ -396,17 +478,7 @@ impl App {
         if topic.draft_state == "drafting" {
             return Err(AppError::Refused("kizn is still drafting this topic: wait, or stop it first".into()));
         }
-        let outcomes = self.store.outcomes(&topic.id)?;
-        if outcomes.is_empty() {
-            return Err(AppError::Refused("a topic needs at least one outcome".into()));
-        }
-        for o in &outcomes {
-            if self.store.concepts(&o.id)?.is_empty() {
-                return Err(AppError::Refused(format!("outcome {} has no concepts yet", o.ord)));
-            }
-            self.store.set_bank_state(&o.id, "waiting", None, None)?;
-        }
-        self.store.confirm_topic(&topic.id, &self.ctx.now())?;
+        self.ctx.confirm_drafted(&topic.id)?;
         self.link_kept_foundations(&topic.id)?;
         self.start_ground(&topic.id);
         self.drafting.lock().unwrap().remove(&topic.id);
@@ -502,6 +574,7 @@ impl App {
             expected: outcomes.iter().map(|o| o.expected).sum(),
             id: topic.id,
             title: topic.title,
+            origin: topic.origin,
             goal: topic.goal,
             status: topic.status,
             draft_state: topic.draft_state,
@@ -517,6 +590,7 @@ impl App {
             out.push(TopicSummary {
                 id: v.id,
                 title: v.title,
+                origin: v.origin,
                 status: v.status,
                 preparing: v.outcomes.iter().any(|o| o.bank_state != "ready"),
                 outcomes: v.outcomes.len() as i64,

@@ -7,7 +7,12 @@ import type { SuggestionView } from "./SuggestionView";
 /**
  * A topic, draft or confirmed, with its outcomes, concepts and bank.
  */
-export type TopicView = { id: string, title: string, goal: string, 
+export type TopicView = { id: string, title: string, 
+/**
+ * Who set it up: "learner", or "kizn" (a foundation it prepared by
+ * itself after checking the ground).
+ */
+origin: string, goal: string, 
 /**
  * "draft" or "confirmed".
  */

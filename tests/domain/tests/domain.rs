@@ -1935,31 +1935,87 @@ async fn solid_and_shaky(w: &mut Kizn, solid: String, shaky: String) {
     assert_eq!((result(&solid).as_deref(), result(&shaky).as_deref()), (Some("solid"), Some("shaky")));
 }
 
-#[then(expr = "{string} is on my map to start with, and {string} isn't")]
-async fn on_map_to_start(w: &mut Kizn, shaky: String, solid: String) {
-    let map = match w.command(Command::GetMap).await {
-        Ok(Reply::Map(m)) => m,
-        other => panic!("expected the map, got {other:?}"),
-    };
-    let suggested = |t: &str| map.nodes.iter().any(|n| n.kind == "suggestion" && n.title == t);
-    assert!(suggested(&shaky), "{shaky} isn't suggested on the map");
-    assert!(!suggested(&solid), "{solid} is on the map, but it seems solid");
+impl Kizn {
+    async fn map(&mut self) -> kizn_app::MapView {
+        match self.command(Command::GetMap).await {
+            Ok(Reply::Map(m)) => m,
+            other => panic!("expected the map, got {other:?}"),
+        }
+    }
+
+    /// A foundation's suggestion on the confirmed topic, by its title.
+    async fn foundation(&mut self, title: &str) -> kizn_app::GroundFoundation {
+        let g = self.ground().await;
+        g.foundations.into_iter().find(|f| f.title == title).unwrap_or_else(|| panic!("no foundation {title}"))
+    }
 }
 
-const OWN_GOAL: &str = "explain how processes and signals work on any machine I run";
+#[then(expr = "kizn prepares {string} underneath, to start with, and not {string}")]
+async fn kizn_prepares(w: &mut Kizn, shaky: String, solid: String) {
+    let under = w.topic_id();
+    let map = w.map().await;
+    let node = map.nodes.iter().find(|n| n.title == shaky).unwrap_or_else(|| panic!("{shaky} isn't on the map"));
+    assert_eq!((node.kind.as_str(), node.origin.as_str()), ("topic", "kizn"), "{shaky} is a topic kizn set up");
+    assert!(map.edges.iter().any(|e| e.upper == under && e.lower == node.id), "{shaky} is underneath");
+    assert!(!map.nodes.iter().any(|n| n.title == solid), "{solid} is on the map, but it seems solid");
+}
 
-#[when(expr = "I start {string} from the check, with a goal of my own")]
-async fn start_from_check(w: &mut Kizn, title: String) {
-    let g = w.ground().await;
-    let id = g.foundations.iter().find(|f| f.title == title).unwrap().suggestion_id.clone();
+#[then(expr = "{string} is drafted and confirmed by itself, with its first questions written")]
+async fn prepared_by_itself(w: &mut Kizn, title: String) {
+    let topic_id = w.foundation(&title).await.topic_id.expect("kizn set it up as a topic");
+    for _ in 0..3000 {
+        let t = w.topic_from(Command::GetTopic { topic_id: topic_id.clone() }).await;
+        if t.status == "confirmed" && t.can_practise {
+            assert_eq!(t.origin, "kizn");
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    panic!("{title} wasn't confirmed with its first questions");
+}
+
+#[then("it proposes no foundations of its own")]
+fn no_foundations_of_its_own(w: &mut Kizn) {
+    let t = w.topic.as_ref().unwrap();
+    assert!(t.foundations.is_empty(), "{} proposed {:?}", t.title, t.foundations);
+}
+
+#[when(expr = "I say I don't need {string}")]
+async fn dont_need(w: &mut Kizn, title: String) {
+    let suggestion_id = w.foundation(&title).await.suggestion_id;
+    w.command(Command::ResolveFoundation { suggestion_id, action: "dismiss".into() }).await.unwrap();
+}
+
+const OWN_GOAL: &str = "explain how networks route traffic between the machines I run";
+
+#[given(expr = "{string} is suggested under it for later")]
+fn suggested_for_later(w: &mut Kizn, title: String) {
+    w.store()
+        .insert_suggestion(&kizn_store::SuggestionRow {
+            id: "01SUGGESTION00000000000002".into(),
+            for_topic: w.topic_id(),
+            title,
+            why: Some("services talk over ports".into()),
+            source: "flag".into(),
+            status: "later".into(),
+            topic_id: None,
+            created_at: "2026-10-25 09:00:00".into(),
+        })
+        .unwrap();
+}
+
+#[when(expr = "I start {string} from my map, with a goal of my own")]
+async fn start_from_map(w: &mut Kizn, title: String) {
+    let id = "01SUGGESTION00000000000002".to_string();
     w.confirmed_topic_id = Some(w.topic_id());
+    let for_title = w.topic.as_ref().unwrap().title.clone();
     // kizn offers a goal to edit; the learner puts it in their own words.
     let prefill = match w.command(Command::FoundationPrefill { suggestion_id: id.clone() }).await {
         Ok(Reply::Prefill(p)) => p,
         other => panic!("expected a prefill, got {other:?}"),
     };
     assert_eq!(prefill.title, title);
-    assert!(prefill.goal.contains(&g.topic_title), "the offered goal says what it's for: {}", prefill.goal);
+    assert!(prefill.goal.contains(&for_title), "the offered goal says what it's for: {}", prefill.goal);
     let start = Command::StartTopic { title, goal: OWN_GOAL.into(), foundation: Some(id) };
     match w.command(start).await {
         Ok(Reply::Topic(t)) => w.started = Some(t),
